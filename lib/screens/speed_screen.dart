@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart' hide DayPeriod;
+import 'package:flutter/foundation.dart';
 import 'package:provider/provider.dart';
 import 'dart:math' as math;
 import 'dart:async';
@@ -11,6 +12,7 @@ import '../services/speed_service.dart';
 import '../services/location_speed_service.dart';
 import '../services/alert_service.dart';
 import '../services/weather_service.dart';
+import '../services/motion_sensor_service.dart';
 
 class SpeedScreen extends StatefulWidget {
   const SpeedScreen({super.key});
@@ -47,6 +49,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
     SpeedService speedService,
     SpeedAlertService alertService,
     VisibilityService visibilityService,
+    MotionSensorService motionService,
   ) {
     tripService.startTrip(_effectiveParams(autoParams, speedService));
     visibilityService.initialize().then((_) {
@@ -55,19 +58,29 @@ class _SpeedScreenState extends State<SpeedScreen> {
       speedService.updateVisibility(visibilityService.visibilityLevel);
       gpsService.setCalculationParams(_effectiveParams(autoParams, speedService));
     });
+    motionService.initialize().then((_) {
+      if (!mounted || !motionService.isInitialized) return;
+      if (kDebugMode) {
+        debugPrint('[SpeedScreen] Motion sensors initialized');
+      }
+    });
     alertService.resetAlertState();
     _recordTimer?.cancel();
-    _recordTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    _recordTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
       if (!gpsService.isTracking) {
         _stopRecording(tripService);
         return;
       }
 
       final risk = gpsService.cachedRiskData;
-      final speed = gpsService.smoothedSpeed;
+      final speed = gpsService.fusedSpeed > 0 ? gpsService.fusedSpeed : gpsService.smoothedSpeed;
       final recSpeed = risk?.recommendedSpeed ?? recommendedSpeed;
       final riskLevel = risk?.riskLevel ?? 'LOW';
-      
+
+      if (motionService.isInitialized) {
+        gpsService.updateFromAccelerometer(motionService.speedEstimateMps);
+      }
+
       final lastPos = gpsService.lastPosition;
       if (lastPos != null) {
         speedService.updatePosition(lastPos.latitude, lastPos.longitude);
@@ -81,14 +94,11 @@ class _SpeedScreenState extends State<SpeedScreen> {
         );
         gpsService.setCalculationParams(_effectiveParams(autoParams, speedService));
       }
-      
+
       if (speed > recSpeed) {
         alertService.triggerAlert(speed, recSpeed);
       }
-      
-      debugPrint(
-        '[SpeedScreen] ADD RECORD - speed: $speed, rec: $recSpeed, risk: $riskLevel',
-      );
+
       tripService.addRecord(
         speed: speed,
         recommendedSpeed: recSpeed,
@@ -183,6 +193,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
     final visibilityService = context.watch<VisibilityService>();
     final tripService = context.watch<TripService>();
     final speedService = context.watch<SpeedService>();
+    final motionService = context.watch<MotionSensorService>();
 
     if (visibilityService.isInitialized &&
         autoParams.visibility != visibilityService.visibilityLevel) {
@@ -195,7 +206,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
     }
 
     final isMonitoring = gpsService.isTracking;
-    final currentSpeed = gpsService.smoothedSpeed;
+    final currentSpeed = gpsService.fusedSpeed > 0 ? gpsService.fusedSpeed : gpsService.smoothedSpeed;
     final errorMessage = gpsService.errorMessage;
     final gpsStatus = gpsService.gpsStatus;
 
@@ -290,6 +301,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
               recommendedSpeed: recommendedSpeed,
               color: speedColor,
               isTracking: isMonitoring,
+              animationDurationMs: gpsService.animationDurationMs,
             ),
             SizedBox(height: 20),
             ZoneAlertWidget(
@@ -369,6 +381,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
                   }
                   final speedService = context.read<SpeedService>();
                   final alertService = context.read<SpeedAlertService>();
+                  final motionService = context.read<MotionSensorService>();
                   _startRecording(
                     gpsService,
                     autoParams,
@@ -377,6 +390,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
                     speedService,
                     alertService,
                     visibilityService,
+                    motionService,
                   );
                 }
               },
@@ -483,6 +497,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
               weatherStatus: _weatherStatus,
               visibilityService: visibilityService,
               baseSpeedLimit: params.baseSpeedLimit,
+              gpsService: gpsService,
             ),
           ],
         ),
@@ -509,6 +524,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
     required String weatherStatus,
     required VisibilityService visibilityService,
     required int baseSpeedLimit,
+    required GpsSpeedService gpsService,
   }) {
     final visibilitySource = visibilityService.permissionDenied
         ? 'Visibility: camera denied, using time/weather estimate'
@@ -540,9 +556,30 @@ class _SpeedScreenState extends State<SpeedScreen> {
             'Base limit in use: $baseSpeedLimit km/h',
             style: TextStyle(color: Colors.white54, fontSize: 12),
           ),
+          if (gpsService.isTracking) ...[
+            SizedBox(height: 4),
+            Text(
+              'Fusion: ${_getFusionStatusText(gpsService.fusionStatus)} | GPS: ${gpsService.smoothedSpeed} km/h',
+              style: TextStyle(
+                color: Colors.white38,
+                fontSize: 10,
+              ),
+            ),
+          ],
         ],
       ),
     );
+  }
+
+  String _getFusionStatusText(FusionStatus status) {
+    switch (status) {
+      case FusionStatus.gpsOnly:
+        return 'GPS Only';
+      case FusionStatus.accelFusion:
+        return 'GPS+Accel';
+      case FusionStatus.fullFusion:
+        return 'Full Fusion';
+    }
   }
 
   Widget _card({required Widget child}) {
@@ -638,6 +675,7 @@ class SpeedometerWidget extends StatefulWidget {
   final int recommendedSpeed;
   final Color color;
   final bool isTracking;
+  final int animationDurationMs;
 
   const SpeedometerWidget({
     super.key,
@@ -645,6 +683,7 @@ class SpeedometerWidget extends StatefulWidget {
     required this.recommendedSpeed,
     required this.color,
     required this.isTracking,
+    this.animationDurationMs = 30,
   });
 
   @override
@@ -668,7 +707,7 @@ class _SpeedometerWidgetState extends State<SpeedometerWidget> {
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<int>(
       tween: IntTween(begin: _animatedSpeed, end: widget.currentSpeed),
-      duration: Duration(milliseconds: 60),
+      duration: Duration(milliseconds: widget.animationDurationMs),
       curve: Curves.easeOut,
       builder: (context, animatedSpeed, child) {
         return SizedBox(

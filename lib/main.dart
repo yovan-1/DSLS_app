@@ -9,6 +9,7 @@ import 'services/auto_parameters_service.dart';
 import 'services/visibility_service.dart';
 import 'services/offline_storage_service.dart';
 import 'services/route_service.dart';
+import 'services/motion_sensor_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,6 +31,7 @@ void main() async {
         ChangeNotifierProvider(create: (_) => GpsSpeedService()),
         ChangeNotifierProvider(create: (_) => AutoParametersService()),
         ChangeNotifierProvider(create: (_) => VisibilityService()),
+        ChangeNotifierProvider(create: (_) => MotionSensorService()),
       ],
       child: const MyApp(),
     ),

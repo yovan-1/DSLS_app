@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart' hide DayPeriod;
 import '../models/speed_calculator.dart';
@@ -32,22 +33,52 @@ class RiskData {
 class SpeedUpdate {
   final int rawGpsSpeed;
   final int smoothedSpeed;
+  final int fusedSpeed;
   final RiskData? riskData;
   final DateTime timestamp;
 
   SpeedUpdate({
     required this.rawGpsSpeed,
     required this.smoothedSpeed,
+    this.fusedSpeed = 0,
     this.riskData,
     required this.timestamp,
   });
 }
 
-void _logDebug(String message) {
-  debugPrint('[SpeedService] $message');
-}
-
 enum GpsStatus { inactive, active, lost }
+
+enum FusionStatus { gpsOnly, accelFusion, fullFusion }
+
+class SpeedSensitivityConfig {
+  final double alpha;
+  final int animationDurationMs;
+  final Duration throttleInterval;
+
+  const SpeedSensitivityConfig({
+    required this.alpha,
+    required this.animationDurationMs,
+    required this.throttleInterval,
+  });
+
+  static const sport = SpeedSensitivityConfig(
+    alpha: 0.5,
+    animationDurationMs: 16,
+    throttleInterval: Duration(milliseconds: 33),
+  );
+
+  static const normal = SpeedSensitivityConfig(
+    alpha: 0.35,
+    animationDurationMs: 30,
+    throttleInterval: Duration(milliseconds: 50),
+  );
+
+  static const smooth = SpeedSensitivityConfig(
+    alpha: 0.2,
+    animationDurationMs: 60,
+    throttleInterval: Duration(milliseconds: 100),
+  );
+}
 
 class GpsSpeedService extends ChangeNotifier {
   StreamSubscription<Position>? _positionStream;
@@ -56,7 +87,7 @@ class GpsSpeedService extends ChangeNotifier {
 
   int _currentSpeed = 0;
   int _smoothedSpeed = 0;
-  int _zeroCounter = 0;
+  int _fusedSpeed = 0;
   bool _isTracking = false;
   bool _hasPermission = false;
   String? _errorMessage;
@@ -64,16 +95,18 @@ class GpsSpeedService extends ChangeNotifier {
   DateTime? _lastUpdate;
   DateTime? _lastGpsUpdate;
   GpsStatus _gpsStatus = GpsStatus.inactive;
+  FusionStatus _fusionStatus = FusionStatus.gpsOnly;
 
   final List<Position> _positionHistory = [];
   final List<int> _speedHistory = [];
-  static const int _historySize = 5;
-  static const int _speedHistorySize = 5;
-  static const double _minMovementThreshold = 1.5;
-  static const double _accuracyThreshold = 20.0;
-  static const double _spikeThreshold = 0.50;
-  static const Duration _staleTimeout = Duration(seconds: 3);
-  static const int _zeroTimeoutCount = 2;
+  static const int _historySize = 3;
+  static const int _speedHistorySize = 3;
+  static const double _minMovementThreshold = 0.5;
+  static const double _accuracyThreshold = 25.0;
+  static const double _spikeThreshold = 0.40;
+  static const Duration _staleTimeout = Duration(seconds: 2);
+
+  double _accelerometerDerivedSpeed = 0;
 
   final _speedController = StreamController<SpeedUpdate>.broadcast();
   Stream<SpeedUpdate> get speedStream => _speedController.stream;
@@ -81,32 +114,35 @@ class GpsSpeedService extends ChangeNotifier {
   SpeedParameters? _lastParams;
   RiskData? _cachedRiskData;
   DateTime? _lastRiskCalcTime;
-  static const _riskCalcInterval = Duration(milliseconds: 200);
+
+  SpeedSensitivityConfig _sensitivity = SpeedSensitivityConfig.normal;
 
   int get currentSpeed => _currentSpeed;
   int get smoothedSpeed => _smoothedSpeed;
+  int get fusedSpeed => _fusedSpeed;
   bool get isTracking => _isTracking;
   bool get hasPermission => _hasPermission;
   String? get errorMessage => _errorMessage;
   Position? get lastPosition => _lastPosition;
   GpsStatus get gpsStatus => _gpsStatus;
+  FusionStatus get fusionStatus => _fusionStatus;
+  int get animationDurationMs => _sensitivity.animationDurationMs;
+
+  void setSensitivity(SpeedSensitivityConfig sensitivity) {
+    _sensitivity = sensitivity;
+    notifyListeners();
+  }
+
+  SpeedSensitivityConfig get sensitivity => _sensitivity;
 
   void setCalculationParams(SpeedParameters params) {
     _lastParams = params;
     _cachedRiskData = null;
   }
 
-  Future<RiskData> _calculateRiskAsync(int speed) async {
-    if (_lastParams == null) {
-      return RiskData(
-        recommendedSpeed: 60,
-        riskLevel: 'LOW',
-        warnings: [],
-        speedColor: Colors.grey,
-      );
-    }
-
-    return _computeRisk(_lastParams!, speed);
+  void updateFromAccelerometer(double speedMps) {
+    _accelerometerDerivedSpeed = speedMps * 3.6;
+    _fusionStatus = FusionStatus.accelFusion;
   }
 
   static RiskData _computeRisk(SpeedParameters params, int currentSpeed) {
@@ -137,12 +173,7 @@ class GpsSpeedService extends ChangeNotifier {
 
   RiskData? get cachedRiskData => _cachedRiskData;
 
-  /// Checks and requests location permissions.
-  ///
-  /// Returns true if location services are enabled and permissions granted.
-  /// Sets errorMessage if permission denied or services disabled.
   Future<bool> checkPermission() async {
-    // Check if location services are enabled on device
     bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
     if (!serviceEnabled) {
       _errorMessage = "Location services are disabled";
@@ -150,10 +181,8 @@ class GpsSpeedService extends ChangeNotifier {
       return false;
     }
 
-    // Check current permission status
     LocationPermission permission = await Geolocator.checkPermission();
     if (permission == LocationPermission.denied) {
-      // Request permission if not granted
       permission = await Geolocator.requestPermission();
       if (permission == LocationPermission.denied) {
         _errorMessage = "Location permissions are denied";
@@ -162,7 +191,6 @@ class GpsSpeedService extends ChangeNotifier {
       }
     }
 
-    // Check if permission is permanently denied
     if (permission == LocationPermission.deniedForever) {
       _errorMessage = "Location permissions are permanently denied";
       notifyListeners();
@@ -175,12 +203,8 @@ class GpsSpeedService extends ChangeNotifier {
     return true;
   }
 
-  /// Starts GPS tracking to monitor vehicle speed.
-  ///
-  /// Must call checkPermission() first to ensure permissions are granted.
-  /// Uses high accuracy GPS with no distance filter for real-time updates.
   Future<void> startTracking() async {
-    if (_isTracking) return; // Already tracking
+    if (_isTracking) return;
 
     final hasPerms = await checkPermission();
     if (!hasPerms) return;
@@ -188,28 +212,26 @@ class GpsSpeedService extends ChangeNotifier {
     _isTracking = true;
     _errorMessage = null;
     _gpsStatus = GpsStatus.active;
-    _zeroCounter = 0;
+    _smoothedSpeed = 0;
+    _fusedSpeed = 0;
+    _cachedRiskData = null;
     notifyListeners();
 
-    // Start timer to check GPS status every 10 seconds
     _gpsCheckTimer = Timer.periodic(
-      Duration(seconds: 10),
+      const Duration(seconds: 10),
       (_) => _checkGpsStatus(),
     );
 
-    // Start stale speed timer - if no update for 3 seconds, force speed to 0
     _staleSpeedTimer = Timer.periodic(
-      Duration(seconds: 1),
+      const Duration(seconds: 1),
       (_) => _checkStaleSpeed(),
     );
 
-    // Configure GPS to use best for navigation accuracy with no distance filter
     final locationSettings = LocationSettings(
       accuracy: LocationAccuracy.bestForNavigation,
       distanceFilter: 0,
     );
 
-    // Start listening to position stream
     _positionStream = Geolocator.getPositionStream(
       locationSettings: locationSettings,
     ).listen(
@@ -222,10 +244,6 @@ class GpsSpeedService extends ChangeNotifier {
     );
   }
 
-  /// Handles incoming GPS position updates.
-  ///
-  /// Applies noise filtering, stationary detection, accuracy validation,
-  /// and smoothed transitions for realistic speed readings.
   void _onPositionUpdate(Position position) {
     _lastGpsUpdate = DateTime.now();
     _gpsStatus = GpsStatus.active;
@@ -240,21 +258,17 @@ class GpsSpeedService extends ChangeNotifier {
     int rawSpeed = 0;
     int filteredSpeed = 0;
 
-    _logDebug(
-      'GPS accuracy: ${accuracy.toStringAsFixed(1)}m, speed: ${gpsSpeedMps.toStringAsFixed(2)} m/s',
-    );
-
     if (accuracy > _accuracyThreshold) {
-      _logDebug(
-        'Ignoring reading - poor accuracy ${accuracy.toStringAsFixed(1)}m > $_accuracyThreshold m',
-      );
+      if (kDebugMode) {
+        debugPrint('[GPS] Low accuracy: ${accuracy.toStringAsFixed(1)}m');
+      }
     } else if (gpsSpeedMps > 0 && !gpsSpeedMps.isNaN) {
       rawSpeed = (gpsSpeedMps * 3.6).round();
 
       if (gpsSpeedMps < _minMovementThreshold) {
-        _logDebug(
-          'Speed ${gpsSpeedMps.toStringAsFixed(2)} m/s < $_minMovementThreshold m/s - treating as stationary',
-        );
+        if (kDebugMode) {
+          debugPrint('[GPS] Stationary: ${gpsSpeedMps.toStringAsFixed(2)} m/s');
+        }
         filteredSpeed = 0;
       } else {
         filteredSpeed = rawSpeed.clamp(0, 300);
@@ -280,28 +294,6 @@ class GpsSpeedService extends ChangeNotifier {
       }
     }
 
-    double totalMovement = 0;
-    for (int i = 1; i < _positionHistory.length; i++) {
-      totalMovement += Geolocator.distanceBetween(
-        _positionHistory[i - 1].latitude,
-        _positionHistory[i - 1].longitude,
-        _positionHistory[i].latitude,
-        _positionHistory[i].longitude,
-      );
-    }
-    final isStationary = totalMovement < 10 && _positionHistory.length >= 3;
-    if (isStationary) {
-      _zeroCounter++;
-      _logDebug(
-        'Stationary detected - total movement: ${totalMovement.toStringAsFixed(1)}m, counter: $_zeroCounter',
-      );
-      if (_zeroCounter >= _zeroTimeoutCount) {
-        filteredSpeed = 0;
-      }
-    } else {
-      _zeroCounter = 0;
-    }
-
     _currentSpeed = filteredSpeed;
 
     _speedHistory.add(filteredSpeed);
@@ -311,93 +303,89 @@ class GpsSpeedService extends ChangeNotifier {
 
     int finalSpeed = filteredSpeed;
 
-    if (_speedHistory.length >= 3) {
-      int lastRecordedSpeed =
-          _speedHistory.length >= 2
-              ? _speedHistory[_speedHistory.length - 2]
-              : filteredSpeed;
-
+    if (_speedHistory.length >= 2) {
+      int lastRecordedSpeed = _speedHistory[_speedHistory.length - 2];
       if (lastRecordedSpeed > 0) {
         double changeRatio =
             (filteredSpeed - lastRecordedSpeed).abs() / lastRecordedSpeed;
-
         if (changeRatio > _spikeThreshold) {
-          _logDebug(
-            'SPIKE DETECTED: change ${(changeRatio * 100).toStringAsFixed(1)}% > ${(_spikeThreshold * 100).toStringAsFixed(0)}% - using previous: $lastRecordedSpeed',
-          );
+          if (kDebugMode) {
+            debugPrint('[GPS] Spike filtered: ${(changeRatio * 100).toStringAsFixed(1)}%');
+          }
           finalSpeed = lastRecordedSpeed;
         }
       }
     }
 
-    int movingAvg = 0;
-    if (_speedHistory.isNotEmpty) {
-      movingAvg =
-          (_speedHistory.reduce((a, b) => a + b) / _speedHistory.length)
-              .round();
-    }
-
     if (filteredSpeed == 0 && _smoothedSpeed > 0) {
-      _smoothedSpeed = (_smoothedSpeed * 0.5).round();
+      _smoothedSpeed = (_smoothedSpeed * 0.3).round();
       if (_smoothedSpeed < 1) _smoothedSpeed = 0;
     } else if (_smoothedSpeed > 0 && finalSpeed == 0) {
-      _smoothedSpeed = (_smoothedSpeed * 0.5).round();
+      _smoothedSpeed = (_smoothedSpeed * 0.3).round();
       if (_smoothedSpeed < 1) _smoothedSpeed = 0;
     } else {
-      double avgComponent = movingAvg * 0.45;
-      double currentComponent = finalSpeed * 0.55;
-      _smoothedSpeed = (avgComponent + currentComponent).round().clamp(0, 300);
+      final alpha = _sensitivity.alpha;
+      _smoothedSpeed = (_smoothedSpeed * (1 - alpha) + finalSpeed * alpha).round().clamp(0, 300);
     }
 
-    _logDebug(
-      'RAW: $rawSpeed | FILTERED: $filteredSpeed | AVG: $movingAvg | FINAL: $finalSpeed | SMOOTHED: $_smoothedSpeed',
-    );
-
-    debugPrint(
-      '[GPS Speed] smoothedSpeed = $_smoothedSpeed, cachedRiskData = ${_cachedRiskData?.recommendedSpeed}',
-    );
+    _updateFusedSpeed();
 
     _lastPosition = position;
     _lastUpdate = position.timestamp;
 
-    RiskData? riskData;
     final now = DateTime.now();
-    if (_lastParams != null &&
-        (_lastRiskCalcTime == null ||
-            now.difference(_lastRiskCalcTime!) > _riskCalcInterval)) {
-      _lastRiskCalcTime = now;
-      _calculateRiskAsync(_smoothedSpeed).then((data) {
-        _cachedRiskData = data;
-        _speedController.add(
-          SpeedUpdate(
-            rawGpsSpeed: rawSpeed,
-            smoothedSpeed: _smoothedSpeed,
-            riskData: data,
-            timestamp: now,
-          ),
-        );
-        _logDebug('UI UPDATE TRIGGERED with risk data');
-        notifyListeners();
-      });
-      riskData = _cachedRiskData;
-    } else {
-      riskData = _cachedRiskData;
+    if (_lastParams != null) {
+      if (_lastRiskCalcTime == null ||
+          now.difference(_lastRiskCalcTime!) > _sensitivity.throttleInterval) {
+        _lastRiskCalcTime = now;
+        _cachedRiskData = _computeRisk(_lastParams!, _fusedSpeed);
+      }
     }
 
     _speedController.add(
       SpeedUpdate(
         rawGpsSpeed: rawSpeed,
         smoothedSpeed: _smoothedSpeed,
-        riskData: riskData,
+        fusedSpeed: _fusedSpeed,
+        riskData: _cachedRiskData,
         timestamp: now,
       ),
     );
     notifyListeners();
   }
 
-  /// Checks if GPS signal has been lost.
-  ///
-  /// If no GPS update received for more than 60 seconds, marks GPS as lost.
+  void _updateFusedSpeed() {
+    double gpsTrust = 1.0;
+
+    if (_lastPosition != null) {
+      final accuracy = _lastPosition!.accuracy;
+      if (accuracy > _accuracyThreshold) {
+        gpsTrust = 0.5;
+      }
+
+      if (_lastGpsUpdate != null) {
+        final timeSince = DateTime.now().difference(_lastGpsUpdate!);
+        if (timeSince.inSeconds > 2) {
+          gpsTrust *= 0.7;
+        }
+        if (timeSince.inSeconds > 5) {
+          gpsTrust *= 0.5;
+        }
+      }
+    }
+
+    final accelTrust = 1.0 - gpsTrust;
+    _fusedSpeed = ((_smoothedSpeed * gpsTrust) + (_accelerometerDerivedSpeed * accelTrust)).round().clamp(0, 300);
+
+    if (gpsTrust > 0.8) {
+      _fusionStatus = FusionStatus.gpsOnly;
+    } else if (gpsTrust > 0.3) {
+      _fusionStatus = FusionStatus.accelFusion;
+    } else {
+      _fusionStatus = FusionStatus.fullFusion;
+    }
+  }
+
   void _checkGpsStatus() {
     if (_lastGpsUpdate != null && _gpsStatus == GpsStatus.active) {
       final timeSinceLastUpdate = DateTime.now().difference(_lastGpsUpdate!);
@@ -408,23 +396,26 @@ class GpsSpeedService extends ChangeNotifier {
     }
   }
 
-  /// Checks if speed data is stale and resets to zero if needed.
   void _checkStaleSpeed() {
     if (!_isTracking) return;
-    
+
     if (_lastGpsUpdate != null) {
       final timeSinceLastUpdate = DateTime.now().difference(_lastGpsUpdate!);
-      
+
       if (timeSinceLastUpdate > _staleTimeout) {
-        _smoothedSpeed = 0;
-        _currentSpeed = 0;
-        _zeroCounter = 0;
-        notifyListeners();
+        if (_smoothedSpeed > 5) {
+          _smoothedSpeed = (_smoothedSpeed * 0.7).round();
+          if (_smoothedSpeed < 1) _smoothedSpeed = 0;
+          notifyListeners();
+        } else {
+          _smoothedSpeed = 0;
+          _currentSpeed = 0;
+          notifyListeners();
+        }
       }
     }
   }
 
-  /// Stops GPS tracking and resets all values.
   Future<void> stopTracking() async {
     _gpsCheckTimer?.cancel();
     _gpsCheckTimer = null;
@@ -435,15 +426,17 @@ class GpsSpeedService extends ChangeNotifier {
     _isTracking = false;
     _currentSpeed = 0;
     _smoothedSpeed = 0;
-    _zeroCounter = 0;
+    _fusedSpeed = 0;
     _lastPosition = null;
     _lastUpdate = null;
     _gpsStatus = GpsStatus.inactive;
     _cachedRiskData = null;
+    _accelerometerDerivedSpeed = 0;
+    _fusionStatus = FusionStatus.gpsOnly;
     _positionHistory.clear();
     _speedHistory.clear();
     _speedController.add(
-      SpeedUpdate(rawGpsSpeed: 0, smoothedSpeed: 0, timestamp: DateTime.now()),
+      SpeedUpdate(rawGpsSpeed: 0, smoothedSpeed: 0, fusedSpeed: 0, timestamp: DateTime.now()),
     );
     notifyListeners();
   }
