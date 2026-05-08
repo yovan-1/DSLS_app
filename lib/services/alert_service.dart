@@ -20,12 +20,21 @@ class SpeedAlertService extends ChangeNotifier {
   DateTime? _lastZoneEnteringTime;
   LocationType? _lastZoneType;
 
+  bool _ttsInitialized = false;
+  bool _ttsAvailable = false;
+  int _ttsAttempts = 0;
+  static const int _maxTtsAttempts = 2;
+
   static const _alertCooldown = Duration(seconds: 5);
   static const _zoneApproachingCooldown = Duration(seconds: 60);
   static const _zoneEnteringCooldown = Duration(seconds: 30);
 
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FlutterTts _tts = FlutterTts();
+
+  SpeedAlertService() {
+    _initTts();
+  }
 
   int get alertThreshold => _alertThreshold;
   bool get enableSound => _enableSound;
@@ -35,6 +44,8 @@ class SpeedAlertService extends ChangeNotifier {
   bool get enableZoneAlerts => _enableZoneAlerts;
   int get warningAheadSpeed => _warningAheadSpeed;
   int get criticalAheadSpeed => _criticalAheadSpeed;
+  bool get ttsAvailable => _ttsAvailable;
+  bool get ttsInitialized => _ttsInitialized;
 
   void setAlertThreshold(int value) {
     _alertThreshold = value.clamp(0, 30);
@@ -76,6 +87,54 @@ class SpeedAlertService extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> _initTts() async {
+    try {
+      await _tts.setSharedInstance(true);
+      await _tts.awaitSpeakCompletion(true);
+
+      _tts.setCompletionHandler(() {
+        debugPrint('[AlertService] TTS: Completed');
+      });
+
+      _tts.setErrorHandler((msg) {
+        debugPrint('[AlertService] TTS Error: $msg');
+        _ttsAvailable = false;
+      });
+
+      _tts.setCancelHandler(() {
+        debugPrint('[AlertService] TTS: Cancelled');
+      });
+
+      await _tts.setLanguage('en-US');
+      await _tts.setSpeechRate(0.5);
+      await _tts.setVolume(1.0);
+      await _tts.setPitch(1.0);
+
+      try {
+        final engines = await _tts.getEngines;
+        if (engines != null && engines.isNotEmpty) {
+          debugPrint('[AlertService] TTS: Available engines - $engines');
+          await _tts.setEngine(engines.first.toString());
+        }
+      } catch (e) {
+        debugPrint('[AlertService] TTS: Engine selection failed - $e');
+      }
+
+      _ttsInitialized = true;
+      _ttsAvailable = true;
+      debugPrint('[AlertService] TTS: Initialized successfully');
+    } catch (e) {
+      debugPrint('[AlertService] TTS: Init error - $e');
+      _ttsInitialized = true;
+      _ttsAvailable = false;
+    }
+  }
+
+  Future<void> testTts() async {
+    debugPrint('[AlertService] TTS: Running test');
+    await _speakAlert("Testing text to speech. If you hear this, T T S is working correctly.");
+  }
+
   AlertLevel checkSpeed(int currentSpeed, int recommendedSpeed) {
     final diff = currentSpeed - recommendedSpeed;
 
@@ -94,9 +153,9 @@ class SpeedAlertService extends ChangeNotifier {
     final diff = currentSpeed - recommendedSpeed;
 
     if (diff >= _criticalAheadSpeed) {
-      return "CRITICAL: You are exceeding the recommended speed by $diff km/h!";
+      return "CRITICAL: You are exceeding the recommended speed by $diff kilometers per hour!";
     } else if (diff >= _warningAheadSpeed) {
-      return "Warning: You are $diff km/h over the recommended speed";
+      return "Warning: You are $diff kilometers per hour over the recommended speed";
     } else if (diff > 0) {
       return "Caution: Slightly above recommended speed";
     } else {
@@ -204,7 +263,7 @@ class SpeedAlertService extends ChangeNotifier {
 
     switch (type) {
       case LocationType.schoolZone:
-        return 'Approaching school zone. $namePart Reduce speed to $speedLimit. Watch for children.';
+        return 'Approaching school zone. $namePart Reduce speed to $speedLimit kilometers per hour. Watch for children.';
       case LocationType.junction:
         return 'Approaching junction. $namePart Reduce speed to $speedLimit.';
       case LocationType.roundabout:
@@ -227,20 +286,52 @@ class SpeedAlertService extends ChangeNotifier {
 
     switch (type) {
       case LocationType.schoolZone:
-        return 'Entering school zone. $namePart Speed limit $speedLimit km/h.';
+        return 'Entering school zone. $namePart Speed limit $speedLimit kilometers per hour.';
       case LocationType.junction:
-        return 'In junction. $namePart Speed limit $speedLimit km/h.';
+        return 'In junction. $namePart Speed limit $speedLimit kilometers per hour.';
       case LocationType.roundabout:
-        return 'In roundabout. $namePart Reduce to $speedLimit km/h.';
+        return 'In roundabout. $namePart Reduce to $speedLimit kilometers per hour.';
       case LocationType.residential:
-        return 'In residential zone. $namePart Speed limit $speedLimit km/h.';
+        return 'In residential zone. $namePart Speed limit $speedLimit kilometers per hour.';
       case LocationType.constructionZone:
-        return 'In construction zone. $namePart Speed limit $speedLimit km/h.';
+        return 'In construction zone. $namePart Speed limit $speedLimit kilometers per hour.';
       case LocationType.urban:
-        return 'In urban area. $namePart Speed limit $speedLimit km/h.';
+        return 'In urban area. $namePart Speed limit $speedLimit kilometers per hour.';
       default:
-        return 'Entering speed zone. $namePart Speed limit $speedLimit km/h.';
+        return 'Entering speed zone. $namePart Speed limit $speedLimit kilometers per hour.';
     }
+  }
+
+  Future<void> _speakAlert(String message) async {
+    if (!_enableVoice) return;
+
+    if (!_ttsAvailable) {
+      debugPrint('[AlertService] TTS not available, using fallback');
+      await _playFallbackSound();
+      return;
+    }
+
+    _ttsAttempts = 0;
+    while (_ttsAttempts < _maxTtsAttempts) {
+      try {
+        debugPrint('[AlertService] TTS: Attempt ${_ttsAttempts + 1} - $message');
+        await _tts.stop();
+        final result = await _tts.speak(message);
+
+        if (result == 1) {
+          debugPrint('[AlertService] TTS: Success');
+          _ttsAvailable = true;
+          return;
+        }
+      } catch (e) {
+        debugPrint('[AlertService] TTS attempt ${_ttsAttempts + 1} failed: $e');
+      }
+      _ttsAttempts++;
+    }
+
+    debugPrint('[AlertService] TTS failed after $_maxTtsAttempts attempts, using fallback');
+    _ttsAvailable = false;
+    await _playFallbackSound();
   }
 
   Future<void> _playAlertSound({required bool isCritical}) async {
@@ -251,7 +342,7 @@ class SpeedAlertService extends ChangeNotifier {
         await _audioPlayer.play(AssetSource('sounds/warning_alert.wav'));
       }
     } catch (e) {
-      // Sound file not available - skip
+      debugPrint('[AlertService] Sound play error: $e');
     }
   }
 
@@ -261,20 +352,16 @@ class SpeedAlertService extends ChangeNotifier {
       await _audioPlayer.play(AssetSource('sounds/warning_alert.wav'));
       await _audioPlayer.setVolume(1.0);
     } catch (e) {
-      // Sound file not available - skip
+      debugPrint('[AlertService] Zone sound play error: $e');
     }
   }
 
-  Future<void> _speakAlert(String message) async {
+  Future<void> _playFallbackSound() async {
     try {
-      await _tts.stop();
-      await _tts.setLanguage('en-US');
-      await _tts.setSpeechRate(0.45);
-      await _tts.setVolume(1.0);
-      await _tts.setPitch(1.0);
-      await _tts.speak(message);
+      debugPrint('[AlertService] Playing fallback sound');
+      await _audioPlayer.play(AssetSource('sounds/alert_fallback.wav'));
     } catch (e) {
-      // Text-to-speech not available - skip voice alert
+      debugPrint('[AlertService] Fallback sound error: $e');
     }
   }
 
@@ -285,7 +372,7 @@ class SpeedAlertService extends ChangeNotifier {
         Vibration.vibrate(pattern: [0, 300, 100, 300, 100, 300]);
       }
     } catch (e) {
-      // Vibration not available
+      debugPrint('[AlertService] Vibration error: $e');
     }
   }
 
@@ -296,7 +383,7 @@ class SpeedAlertService extends ChangeNotifier {
         Vibration.vibrate(pattern: [0, 200, 100, 200]);
       }
     } catch (e) {
-      // Vibration not available
+      debugPrint('[AlertService] Vibration error: $e');
     }
   }
 
@@ -307,7 +394,7 @@ class SpeedAlertService extends ChangeNotifier {
         Vibration.vibrate(duration: 100);
       }
     } catch (e) {
-      // Vibration not available
+      debugPrint('[AlertService] Vibration error: $e');
     }
   }
 
@@ -318,7 +405,7 @@ class SpeedAlertService extends ChangeNotifier {
         Vibration.vibrate(duration: 200);
       }
     } catch (e) {
-      // Vibration not available
+      debugPrint('[AlertService] Vibration error: $e');
     }
   }
 
@@ -328,6 +415,7 @@ class SpeedAlertService extends ChangeNotifier {
     _lastZoneApproachingTime = null;
     _lastZoneEnteringTime = null;
     _lastZoneType = null;
+    _ttsAttempts = 0;
   }
 
   @override
