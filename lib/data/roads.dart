@@ -3,25 +3,25 @@ import '../models/speed_calculator.dart';
 
 final List<RoadSegment> mbararaRoads = [
   RoadSegment(
-    id: 'mbarara_kasese_road',
-    name: 'Mbarara Kasese Road',
+    id: 'northern_bypass',
+    name: 'Mbarara Northern Bypass',
     waypoints: const [
-      MapPoint(latitude: -0.6118676, longitude: 30.63680),
-      MapPoint(latitude: -0.5898870, longitude: 30.58509),
+      MapPoint(latitude: -0.5814, longitude: 30.6583),
+      MapPoint(latitude: -0.5900, longitude: 30.6800),
     ],
-    speedLimit: 56,
-    widthMeters: 20,
+    speedLimit: 80,
+    widthMeters: 25,
     type: LocationType.highway,
   ),
   RoadSegment(
-    id: 'mbarara_northern_bypass',
-    name: 'Mbarara Northern Bypass',
+    id: 'kampala_road',
+    name: 'Kampala Road',
     waypoints: const [
-      MapPoint(latitude: -0.5833907, longitude: 30.67969),
-      MapPoint(latitude: -0.6300887, longitude: 30.60031),
+      MapPoint(latitude: -0.6100, longitude: 30.6600),
+      MapPoint(latitude: -0.5800, longitude: 30.6700),
     ],
-    speedLimit: 80,
+    speedLimit: 50,
     widthMeters: 20,
-    type: LocationType.highway,
+    type: LocationType.urban,
   ),
 ];
