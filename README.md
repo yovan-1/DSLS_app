@@ -96,12 +96,80 @@ lib/
     └── bottom_nav.dart
 ```
 
-## Future Enhancements
-- Weather API integration
-- Map integration for location detection
-- Speed limit API integration
-- Speed violation notifications
-- Trip history logging
+## CI/CD Pipeline
+
+This project uses GitHub Actions for continuous integration and continuous deployment.
+
+### Workflows
+
+| Workflow | File | Trigger | Purpose |
+|----------|------|---------|---------|
+| Main CI | `.github/workflows/flutter-ci.yml` | Push to any branch, PR | Build & test on every change |
+| Release | `.github/workflows/release.yml` | Version tags (`v*`) | Create releases with APKs |
+
+### Main CI Workflow (`flutter-ci.yml`)
+
+The main workflow runs on every push and pull request to ensure code quality:
+
+```
+┌─────────────────┐
+│  Analyze & Test │  (Parallel jobs)
+├─────────────────┤
+│ • flutter analyze --fatal-infos --fatal-warnings
+│ • flutter test test/unit/
+│ • flutter test test/widget_test.dart
+└────────┬────────┘
+         │ (on success)
+    ┌────┴────┐
+    │         │
+    ▼         ▼
+┌───────┐ ┌──────────┐
+│ Debug │ │ Release  │
+│  APK  │ │   APK    │
+└───┬───┘ └────┬─────┘
+    │           │
+    ▼           ▼
+┌─────────┐ ┌────────────┐
+│ Artifact│ │  Artifact  │
+│ (30 days)│ │ (30 days) │
+└─────────┘ └────────────┘
+```
+
+### Release Workflow (`release.yml`)
+
+Triggered when pushing version tags (e.g., `v1.0.0`):
+
+```bash
+# Create a release
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+This creates:
+- Draft GitHub Release
+- Release APK uploaded to the release
+
+### Build Artifacts
+
+| Type | Retention | Access |
+|------|-----------|--------|
+| Debug APK | 30 days | GitHub Actions > Artifacts |
+| Release APK | 30 days | GitHub Actions > Artifacts |
+| Release APK | Permanent | GitHub Releases |
+
+### Requirements
+
+- **Static Analysis**: All code must pass `flutter analyze` with no warnings or infos
+- **Tests**: All unit tests must pass before building
+- **Builds**: Both debug and release APKs are built automatically
+
+### Status Badges
+
+Add to your README after pushing:
+
+```markdown
+[![Flutter CI](https://github.com/yovan-1/DSLS_app_refined_v6_no_sidebar/actions/workflows/flutter-ci.yml/badge.svg)](https://github.com/yovan-1/DSLS_app_refined_v6_no_sidebar/actions/workflows/flutter-ci.yml)
+```
 
 ## License
 MIT License

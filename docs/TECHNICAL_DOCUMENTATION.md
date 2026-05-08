@@ -265,6 +265,74 @@ lib/
 
 ---
 
+## CI/CD Pipeline
+
+### Overview
+
+The project uses GitHub Actions for continuous integration and continuous deployment (CI/CD) to ensure code quality and automate builds.
+
+### Workflows
+
+#### 1. Main CI Workflow (`.github/workflows/flutter-ci.yml`)
+
+Runs on every push to any branch and pull requests.
+
+**Jobs:**
+
+| Job | Dependencies | Description |
+|-----|--------------|-------------|
+| `analyze-and-test` | - | Static analysis + unit tests + widget tests |
+| `build-debug` | `analyze-and-test` | Builds debug APK |
+| `build-release` | `analyze-and-test` | Builds release APK with version |
+
+**Pipeline Flow:**
+```
+Push/PR → Analyze & Test → [Success] → Debug APK + Release APK
+                        → [Failure] → Pipeline stops
+```
+
+**Key Features:**
+- Caches Flutter packages for faster builds
+- Fails on warnings and infos (`--fatal-infos --fatal-warnings`)
+- Uploads APKs as artifacts (30-day retention)
+- Parallel job execution for faster builds
+
+#### 2. Release Workflow (`.github/workflows/release.yml`)
+
+Triggered when pushing version tags.
+
+**Jobs:**
+
+| Job | Dependencies | Description |
+|-----|--------------|-------------|
+| `create-release` | - | Creates draft GitHub Release |
+| `build-release-apk` | `create-release` | Builds and uploads release APK |
+| `notify-success` | `build-release-apk` | Success notification |
+
+### Build Configuration
+
+**Flutter Version:** 3.41.6
+**Channel:** Stable
+
+**Gradle Settings** (`android/gradle.properties`):
+- `daemon=true` - Enables Gradle daemon
+- `parallel=true` - Enables parallel builds
+- `caching=true` - Enables build caching
+- `jvmargs=-Xmx4G` - 4GB heap for Gradle
+
+### Artifacts
+
+| Type | Location | Retention |
+|------|----------|-----------|
+| Debug APK | GitHub Actions > Artifacts | 30 days |
+| Release APK | GitHub Releases | Permanent |
+
+### Environment Variables
+
+No required secrets for basic builds. Release signing uses debug keystore by default.
+
+---
+
 ## Contact & Support
 
 For issues or questions, please refer to the project repository or contact the development team.
