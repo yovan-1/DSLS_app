@@ -97,6 +97,23 @@ class _SpeedScreenState extends State<SpeedScreen> {
 
       if (speed > recSpeed) {
         alertService.triggerAlert(speed, recSpeed);
+      } else {
+        final locationResult = speedService.locationResult;
+        if (locationResult.status == LocationSpeedStatus.approachingZone) {
+          alertService.triggerZoneAlert(
+            zoneType: locationResult.locationType,
+            zoneName: locationResult.activeZoneName,
+            speedLimit: locationResult.speedLimit,
+            isApproaching: true,
+          );
+        } else if (locationResult.status == LocationSpeedStatus.inZone) {
+          alertService.triggerZoneAlert(
+            zoneType: locationResult.locationType,
+            zoneName: locationResult.activeZoneName,
+            speedLimit: locationResult.speedLimit,
+            isApproaching: false,
+          );
+        }
       }
 
       tripService.addRecord(
