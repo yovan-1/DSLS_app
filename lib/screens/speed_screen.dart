@@ -129,7 +129,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
   }) async {
     final now = DateTime.now();
     final recentlyFetched = _lastWeatherFetch != null &&
-        now.difference(_lastWeatherFetch!) < const Duration(minutes: 30);
+        now.difference(_lastWeatherFetch!) < const Duration(minutes: 10);
 
     if (_weatherFetchInProgress || (!force && recentlyFetched)) return;
 

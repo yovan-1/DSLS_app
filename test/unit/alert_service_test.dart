@@ -2,6 +2,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:dsls_app/services/alert_service.dart';
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('SpeedAlertService', () {
     late SpeedAlertService service;
 

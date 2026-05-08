@@ -16,8 +16,8 @@ class SpeedAlertService extends ChangeNotifier {
   DateTime? _lastAlertTime;
   static const _alertCooldown = Duration(seconds: 5);
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  final FlutterTts _tts = FlutterTts();
+  AudioPlayer? _audioPlayer;
+  FlutterTts? _tts;
 
   int get alertThreshold => _alertThreshold;
   bool get enableSound => _enableSound;
@@ -134,10 +134,11 @@ class SpeedAlertService extends ChangeNotifier {
 
   Future<void> _playAlertSound({required bool isCritical}) async {
     try {
+      final audioPlayer = _audioPlayer ??= AudioPlayer();
       if (isCritical) {
-        await _audioPlayer.play(AssetSource('sounds/critical_alert.wav'));
+        await audioPlayer.play(AssetSource('sounds/critical_alert.wav'));
       } else {
-        await _audioPlayer.play(AssetSource('sounds/warning_alert.wav'));
+        await audioPlayer.play(AssetSource('sounds/warning_alert.wav'));
       }
     } catch (e) {
       // Sound file not available - skip
@@ -146,12 +147,13 @@ class SpeedAlertService extends ChangeNotifier {
 
   Future<void> _speakAlert(String message) async {
     try {
-      await _tts.stop();
-      await _tts.setLanguage('en-US');
-      await _tts.setSpeechRate(0.45);
-      await _tts.setVolume(1.0);
-      await _tts.setPitch(1.0);
-      await _tts.speak(message);
+      final tts = _tts ??= FlutterTts();
+      await tts.stop();
+      await tts.setLanguage('en-US');
+      await tts.setSpeechRate(0.45);
+      await tts.setVolume(1.0);
+      await tts.setPitch(1.0);
+      await tts.speak(message);
     } catch (e) {
       // Text-to-speech not available - skip voice alert
     }
@@ -186,8 +188,8 @@ class SpeedAlertService extends ChangeNotifier {
 
   @override
   void dispose() {
-    _tts.stop();
-    _audioPlayer.dispose();
+    _tts?.stop();
+    _audioPlayer?.dispose();
     super.dispose();
   }
 }
