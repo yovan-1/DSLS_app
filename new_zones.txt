@@ -1,0 +1,29 @@
+# ============================================
+# MBARARA SPEED ZONES AND ROADS DATA
+# ============================================
+
+# ============ ZONES (Points) ============
+# Format: id,name,latitude,longitude,speedLimit,triggerRadius,type
+#
+# Available types: highway, suburban, urban, residential, schoolZone, constructionZone, roundabout, junction
+#
+# 
+#school_north,Mbarara Primary School,-0.6021,30.6188,30,100,schoolZone
+#parking, MUST parking space,-0.5957975,30.60024,20,10,schoolZone
+#main_gate,Mbarara University,-0.5945678,30.59981,30,30,schoolZone
+#roundabout,mile 4 roundabout,-0.6028074,30.61884,35,30,roundabout
+#turn,Ibanda junction,-0.5981443,30.60997,40,30,junction
+
+# ============ ROADS (Lines) ============
+# Format: id,name,startLat,startLon,endLat,endLon,speedLimit,widthMeters,type
+#
+# For roads with multiple waypoints (curved roads), add more lat,lon pairs:
+# id,name,lat1,lon1,lat2,lon2,lat3,lon3,lat4,lon4,speedLimit,widthMeters,type
+#
+# Available types: highway, suburban, urban, residential
+#
+# 
+# road_kasese,Mbarara Kasese Road,-0.6118,30.6368,-0.5898,30.5850,80,20,highway
+#
+# 
+# road_curved,Curved Road,-0.6100,30.6300,-0.6000,30.6200,-0.5900,30.6100,80,20,suburban
