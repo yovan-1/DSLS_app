@@ -2,11 +2,16 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/material.dart' hide DayPeriod;
 import 'package:provider/provider.dart';
-import 'package:fl_chart/fl_chart.dart';
 import 'package:path_provider/path_provider.dart';
 import '../models/speed_calculator.dart';
 import '../models/trip_data.dart';
 import '../services/trip_service.dart';
+import '../widgets/score_card.dart';
+import '../widgets/trip_list_item.dart';
+import '../widgets/stats_row.dart';
+import '../widgets/trend_graph.dart';
+import '../widgets/behavior_summary.dart';
+import '../widgets/driving_graph.dart';
 import 'trip_details_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
@@ -63,52 +68,62 @@ class _HistoryScreenState extends State<HistoryScreen> {
           body:
               filteredTrips.isEmpty && allTrips.isEmpty
                   ? _buildEmptyState()
-                  : SingleChildScrollView(
-                    padding: EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        if (_selectedLocation != null || _startDate != null)
-                          _buildActiveFilters(),
-                        _buildScoreCard(score),
-                        SizedBox(height: 20),
-                        _buildSummaryCards(tripService),
-                        SizedBox(height: 20),
-                        _buildStatsRow(tripService),
-                        SizedBox(height: 20),
-                        Text(
-                          filteredTrips.length != allTrips.length
-                              ? "Filtered Trips (${filteredTrips.length})"
-                              : "Recent Trips",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
+                  : RefreshIndicator(
+                    onRefresh: () async {
+                      setState(() {});
+                    },
+                    child: SingleChildScrollView(
+                      physics: AlwaysScrollableScrollPhysics(),
+                      padding: EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          if (_selectedLocation != null || _startDate != null)
+                            _buildActiveFilters(),
+                          ScoreCard(score: score),
+                          SizedBox(height: 20),
+                          _buildSummaryCards(tripService),
+                          SizedBox(height: 20),
+                          StatsRow(service: tripService),
+                          SizedBox(height: 20),
+                          Text(
+                            filteredTrips.length != allTrips.length
+                                ? "Filtered Trips (${filteredTrips.length})"
+                                : "Recent Trips",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
                           ),
-                        ),
-                        SizedBox(height: 10),
-                        ...filteredTrips.map(
-                          (trip) => _buildTripCard(context, trip, tripService),
-                        ),
-                        SizedBox(height: 20),
-                        Text(
-                          "Current Session Data",
-                          style: TextStyle(
-                            fontWeight: FontWeight.bold,
-                            fontSize: 18,
+                          SizedBox(height: 10),
+                          ...filteredTrips.map(
+                            (trip) => TripListItem(
+                              trip: trip,
+                              service: tripService,
+                              onDelete: (id) => tripService.deleteTrip(id),
+                            ),
                           ),
-                        ),
-                        SizedBox(height: 10),
-                        _buildDrivingDataGraph(tripService),
-                        SizedBox(height: 15),
-                        _buildBehaviorSummary(tripService),
-                        SizedBox(height: 20),
-                        Text(
-                          "Risk Trends (Last 7 Days)",
-                          style: TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        SizedBox(height: 10),
-                        _buildTrendGraph(filteredTrips),
-                      ],
+                          SizedBox(height: 20),
+                          Text(
+                            "Current Session Data",
+                            style: TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 18,
+                            ),
+                          ),
+                          SizedBox(height: 10),
+                          DrivingGraph(),
+                          SizedBox(height: 15),
+                          BehaviorSummary(tripService: tripService),
+                          SizedBox(height: 20),
+                          Text(
+                            "Risk Trends (Last 7 Days)",
+                            style: TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          SizedBox(height: 10),
+                          TrendGraph(trips: filteredTrips.take(7).toList()),
+                        ],
+                      ),
                     ),
                   ),
         );
@@ -138,670 +153,6 @@ class _HistoryScreenState extends State<HistoryScreen> {
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildScoreCard(DrivingScore score) {
-    Color scoreColor;
-    if (score.overall >= 80) {
-      scoreColor = Colors.green;
-    } else if (score.overall >= 60) {
-      scoreColor = Colors.orange;
-    } else {
-      scoreColor = Colors.red;
-    }
-
-    return Container(
-      padding: EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [scoreColor, scoreColor.withValues(alpha: 0.7)],
-        ),
-        borderRadius: BorderRadius.circular(20),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 80,
-            height: 80,
-            decoration: BoxDecoration(
-              color: Colors.white,
-              shape: BoxShape.circle,
-            ),
-            child: Center(
-              child: Text(
-                score.grade,
-                style: TextStyle(
-                  fontSize: 36,
-                  fontWeight: FontWeight.bold,
-                  color: scoreColor,
-                ),
-              ),
-            ),
-          ),
-          SizedBox(width: 20),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  "Driving Score",
-                  style: TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                SizedBox(height: 5),
-                Text(
-                  score.description,
-                  style: TextStyle(color: Colors.white70),
-                ),
-                SizedBox(height: 10),
-                Row(
-                  children: [
-                    _buildMiniStat("Speed", "${score.speedCompliance}%"),
-                    SizedBox(width: 15),
-                    _buildMiniStat("Smooth", "${score.smoothness}%"),
-                    SizedBox(width: 15),
-                    _buildMiniStat("Focus", "${score.attention}%"),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildMiniStat(String label, String value) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
-        ),
-        Text(label, style: TextStyle(color: Colors.white60, fontSize: 11)),
-      ],
-    );
-  }
-
-  Widget _buildStatsRow(TripService service) {
-    return Row(
-      children: [
-        Expanded(
-          child: _buildStatCard(
-            "Total Trips",
-            "${service.totalTrips}",
-            Icons.directions_car,
-          ),
-        ),
-        SizedBox(width: 10),
-        Expanded(
-          child: _buildStatCard(
-            "Total Distance",
-            "${service.totalDistance} km",
-            Icons.route,
-          ),
-        ),
-        SizedBox(width: 10),
-        Expanded(
-          child: _buildStatCard(
-            "Avg Speed",
-            "${service.averageSpeed.round()} km/h",
-            Icons.speed,
-          ),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildStatCard(String label, String value, IconData icon) {
-    return Container(
-      padding: EdgeInsets.all(12),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.shade300, blurRadius: 5)],
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: Colors.blue),
-          SizedBox(height: 5),
-          Text(value, style: TextStyle(fontWeight: FontWeight.bold)),
-          Text(label, style: TextStyle(fontSize: 11, color: Colors.grey)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTripCard(
-    BuildContext context,
-    TripData trip,
-    TripService service,
-  ) {
-    final locationLabel = SpeedCalculator.getLocationLabel(trip.location);
-    final riskColor =
-        trip.overSpeedCount > 5
-            ? Colors.red
-            : (trip.overSpeedCount > 2 ? Colors.orange : Colors.green);
-
-    return GestureDetector(
-      onTap: () => Navigator.push(
-        context,
-        MaterialPageRoute(builder: (_) => TripDetailsScreen(trip: trip)),
-      ),
-      child: Container(
-        margin: EdgeInsets.only(bottom: 12),
-        padding: EdgeInsets.all(15),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(15),
-          boxShadow: [BoxShadow(color: Colors.grey.shade300, blurRadius: 5)],
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Icon(Icons.directions_car, color: Colors.blue),
-                    SizedBox(width: 10),
-                    Text(
-                      locationLabel,
-                      style: TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                  ],
-                ),
-                Text(
-                  _formatDate(trip.startTime),
-                  style: TextStyle(color: Colors.grey, fontSize: 12),
-                ),
-              ],
-            ),
-            SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceAround,
-              children: [
-                _buildTripStat("Duration", trip.formattedDuration),
-                _buildTripStat("Max Speed", "${trip.maxSpeed} km/h"),
-                _buildTripStat(
-                  "Over Speed",
-                  "${trip.overSpeedCount}x",
-                  color: riskColor,
-                ),
-              ],
-            ),
-            SizedBox(height: 10),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Text(
-                  "Recommended: ${trip.recommendedSpeed} km/h",
-                  style: TextStyle(fontSize: 12, color: Colors.grey),
-                ),
-                Row(
-                  children: [
-                    Text(
-                      "Tap for details",
-                      style: TextStyle(fontSize: 10, color: Colors.blue.shade300),
-                    ),
-                    SizedBox(width: 8),
-                    GestureDetector(
-                      onTap: () => _confirmDelete(context, trip.id, service),
-                      child: Icon(
-                        Icons.delete_outline,
-                        size: 20,
-                        color: Colors.red.shade300,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _confirmDelete(BuildContext context, String tripId, TripService service) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text("Delete Trip"),
-        content: Text("Are you sure you want to delete this trip?"),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: Text("Cancel"),
-          ),
-          TextButton(
-            onPressed: () {
-              service.deleteTrip(tripId);
-              Navigator.pop(context);
-            },
-            child: Text("Delete", style: TextStyle(color: Colors.red)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildTripStat(String label, String value, {Color? color}) {
-    return Column(
-      children: [
-        Text(
-          value,
-          style: TextStyle(fontWeight: FontWeight.bold, color: color),
-        ),
-        Text(label, style: TextStyle(fontSize: 11, color: Colors.grey)),
-      ],
-    );
-  }
-
-  Widget _buildTrendGraph(List<TripData> trips) {
-    return Container(
-      height: 120,
-      padding: EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.shade300, blurRadius: 5)],
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-        crossAxisAlignment: CrossAxisAlignment.end,
-        children: List.generate(7, (index) {
-          final trip = index < trips.length ? trips[index] : null;
-          final height =
-              trip != null
-                  ? (100 - trip.overSpeedCount * 10).clamp(20, 100).toDouble()
-                  : 20.0;
-          final color =
-              (trip?.overSpeedCount ?? 0) > 3 ? Colors.red : Colors.green;
-
-          return Column(
-            mainAxisAlignment: MainAxisAlignment.end,
-            children: [
-              Container(
-                width: 30,
-                height: height,
-                decoration: BoxDecoration(
-                  color: color,
-                  borderRadius: BorderRadius.circular(4),
-                ),
-              ),
-              SizedBox(height: 5),
-              Text(
-                ["M", "T", "W", "T", "F", "S", "S"][index],
-                style: TextStyle(fontSize: 10, color: Colors.grey),
-              ),
-            ],
-          );
-        }),
-      ),
-    );
-  }
-
-  Widget _buildDrivingDataGraph(TripService tripService) {
-    final records = tripService.drivingRecords;
-
-    if (records.isEmpty) {
-      return Container(
-        height: 200,
-        padding: EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(12),
-          boxShadow: [BoxShadow(color: Colors.grey.shade300, blurRadius: 5)],
-        ),
-        child: Center(
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.show_chart, size: 50, color: Colors.grey.shade400),
-              SizedBox(height: 10),
-              Text(
-                "No data available",
-                style: TextStyle(color: Colors.grey, fontSize: 16),
-              ),
-              Text(
-                "Start driving to see real-time data",
-                style: TextStyle(color: Colors.grey.shade400, fontSize: 12),
-              ),
-            ],
-          ),
-        ),
-      );
-    }
-
-    final speedSpots = <FlSpot>[];
-    final riskSpots = <FlSpot>[];
-
-    for (int i = 0; i < records.length; i++) {
-      speedSpots.add(FlSpot(i.toDouble(), records[i].speed.toDouble()));
-
-      int riskValue;
-      switch (records[i].riskLevel) {
-        case 'HIGH':
-          riskValue = 100;
-          break;
-        case 'MEDIUM':
-          riskValue = 50;
-          break;
-        default:
-          riskValue = 0;
-      }
-      riskSpots.add(FlSpot(i.toDouble(), riskValue.toDouble()));
-    }
-
-    return Container(
-      height: 220,
-      padding: EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.shade300, blurRadius: 5)],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Speed vs Time",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          SizedBox(height: 10),
-          Expanded(
-            child: LineChart(
-              LineChartData(
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  horizontalInterval: 30,
-                  getDrawingHorizontalLine:
-                      (value) =>
-                          FlLine(color: Colors.grey.shade200, strokeWidth: 1),
-                ),
-                titlesData: FlTitlesData(
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 30,
-                      interval: 30,
-                      getTitlesWidget:
-                          (value, meta) => Text(
-                            '${value.toInt()}',
-                            style: TextStyle(fontSize: 10, color: Colors.grey),
-                          ),
-                    ),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 20,
-                      interval: (records.length / 5).ceilToDouble().clamp(
-                        1,
-                        double.infinity,
-                      ),
-                      getTitlesWidget: (value, meta) {
-                        if (value.toInt() >= records.length) return SizedBox();
-                        final seconds = value.toInt();
-                        return Text(
-                          '${seconds}s',
-                          style: TextStyle(fontSize: 9, color: Colors.grey),
-                        );
-                      },
-                    ),
-                  ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                ),
-                borderData: FlBorderData(show: false),
-                minX: 0,
-                maxX: (records.length - 1).toDouble().clamp(0, double.infinity),
-                minY: 0,
-                maxY: 150,
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: speedSpots,
-                    isCurved: true,
-                    color: Colors.blue,
-                    barWidth: 2,
-                    isStrokeCapRound: true,
-                    dotData: FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      color: Colors.blue.withValues(alpha: 0.1),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          SizedBox(height: 10),
-          Text(
-            "Risk Level",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
-          ),
-          SizedBox(height: 10),
-          Expanded(
-            child: LineChart(
-              LineChartData(
-                gridData: FlGridData(
-                  show: true,
-                  drawVerticalLine: false,
-                  horizontalInterval: 25,
-                  getDrawingHorizontalLine:
-                      (value) =>
-                          FlLine(color: Colors.grey.shade200, strokeWidth: 1),
-                ),
-                titlesData: FlTitlesData(
-                  leftTitles: AxisTitles(
-                    sideTitles: SideTitles(
-                      showTitles: true,
-                      reservedSize: 40,
-                      interval: 25,
-                      getTitlesWidget: (value, meta) {
-                        String label;
-                        if (value >= 75) {
-                          label = 'HIGH';
-                        } else if (value >= 25) {
-                          label = 'MED';
-                        } else {
-                          label = 'LOW';
-                        }
-                        return Text(
-                          label,
-                          style: TextStyle(fontSize: 9, color: Colors.grey),
-                        );
-                      },
-                    ),
-                  ),
-                  bottomTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  topTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                  rightTitles: AxisTitles(
-                    sideTitles: SideTitles(showTitles: false),
-                  ),
-                ),
-                borderData: FlBorderData(show: false),
-                minX: 0,
-                maxX: (records.length - 1).toDouble().clamp(0, double.infinity),
-                minY: 0,
-                maxY: 100,
-                lineBarsData: [
-                  LineChartBarData(
-                    spots: riskSpots,
-                    isCurved: true,
-                    color: Colors.orange,
-                    barWidth: 2,
-                    isStrokeCapRound: true,
-                    dotData: FlDotData(show: false),
-                    belowBarData: BarAreaData(
-                      show: true,
-                      color: Colors.orange.withValues(alpha: 0.1),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ),
-          SizedBox(height: 5),
-          Text(
-            "Records: ${records.length}",
-            style: TextStyle(fontSize: 10, color: Colors.grey),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBehaviorSummary(TripService tripService) {
-    final safe = tripService.safeDrivingPercent;
-    final moderate = tripService.moderateDrivingPercent;
-    final risky = tripService.riskyDrivingPercent;
-
-    if (tripService.drivingRecords.isEmpty) {
-      return SizedBox.shrink();
-    }
-
-    return Container(
-      padding: EdgeInsets.all(15),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.grey.shade300, blurRadius: 5)],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "Driving Behavior Analysis",
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
-          ),
-          SizedBox(height: 15),
-          Row(
-            children: [
-              Expanded(
-                child: _buildBehaviorCard(
-                  "Safe",
-                  "$safe%",
-                  Colors.green,
-                  Icons.check_circle,
-                ),
-              ),
-              SizedBox(width: 10),
-              Expanded(
-                child: _buildBehaviorCard(
-                  "Moderate",
-                  "$moderate%",
-                  Colors.orange,
-                  Icons.warning,
-                ),
-              ),
-              SizedBox(width: 10),
-              Expanded(
-                child: _buildBehaviorCard(
-                  "Risky",
-                  "$risky%",
-                  Colors.red,
-                  Icons.dangerous,
-                ),
-              ),
-            ],
-          ),
-          SizedBox(height: 15),
-          LinearProgressIndicator(
-            value: safe / 100,
-            backgroundColor: Colors.grey.shade200,
-            valueColor: AlwaysStoppedAnimation<Color>(Colors.green),
-            minHeight: 8,
-            borderRadius: BorderRadius.circular(4),
-          ),
-          SizedBox(height: 5),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Text("Safe", style: TextStyle(fontSize: 10, color: Colors.green)),
-              Text(
-                "Moderate",
-                style: TextStyle(fontSize: 10, color: Colors.orange),
-              ),
-              Text("Risky", style: TextStyle(fontSize: 10, color: Colors.red)),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBehaviorCard(
-    String label,
-    String value,
-    Color color,
-    IconData icon,
-  ) {
-    return Container(
-      padding: EdgeInsets.all(10),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.1),
-        borderRadius: BorderRadius.circular(10),
-        border: Border.all(color: color.withValues(alpha: 0.3)),
-      ),
-      child: Column(
-        children: [
-          Icon(icon, color: color, size: 24),
-          SizedBox(height: 5),
-          Text(
-            value,
-            style: TextStyle(
-              fontSize: 18,
-              fontWeight: FontWeight.bold,
-              color: color,
-            ),
-          ),
-          Text(label, style: TextStyle(fontSize: 11, color: color)),
-        ],
-      ),
-    );
-  }
-
-  String _formatDate(DateTime dt) {
-    return "${dt.day}/${dt.month}/${dt.year} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
-  }
-
-  void _showClearDialog(BuildContext context, TripService service) {
-    showDialog(
-      context: context,
-      builder:
-          (context) => AlertDialog(
-            title: Text("Clear History"),
-            content: Text("Are you sure you want to delete all trip history?"),
-            actions: [
-              TextButton(
-                onPressed: () => Navigator.pop(context),
-                child: Text("Cancel"),
-              ),
-              TextButton(
-                onPressed: () {
-                  service.clearHistory();
-                  Navigator.pop(context);
-                },
-                child: Text("Clear", style: TextStyle(color: Colors.red)),
-              ),
-            ],
-          ),
     );
   }
 
@@ -864,6 +215,29 @@ class _HistoryScreenState extends State<HistoryScreen> {
       parts.add('To: ${_formatDate(_endDate!)}');
     }
     return parts.join(', ');
+  }
+
+  void _showClearDialog(BuildContext context, TripService service) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text("Clear History"),
+        content: Text("Are you sure you want to delete all trip history?"),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text("Cancel"),
+          ),
+          TextButton(
+            onPressed: () {
+              service.clearHistory();
+              Navigator.pop(context);
+            },
+            child: Text("Clear", style: TextStyle(color: Colors.red)),
+          ),
+        ],
+      ),
+    );
   }
 
   void _showFilterDialog(BuildContext context) {
@@ -962,6 +336,10 @@ class _HistoryScreenState extends State<HistoryScreen> {
         ),
       ),
     );
+  }
+
+  String _formatDate(DateTime dt) {
+    return "${dt.day}/${dt.month}/${dt.year} ${dt.hour}:${dt.minute.toString().padLeft(2, '0')}";
   }
 
   Future<void> _exportTrips(BuildContext context, List<TripData> trips) async {

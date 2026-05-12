@@ -2,6 +2,7 @@ import 'package:flutter/material.dart' hide DayPeriod;
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../services/route_service.dart';
 import '../models/speed_calculator.dart';
 
@@ -46,7 +47,7 @@ class RouteScreen extends StatelessWidget {
                 ),
                 SizedBox(height: 10),
                 ...routes.asMap().entries.map(
-                  (entry) => _buildRouteCard(entry.value, entry.key == 0),
+                  (entry) => _buildRouteCard(context, entry.value, entry.key == 0),
                 ),
                 SizedBox(height: 20),
                 _buildRouteTips(routeService),
@@ -143,7 +144,7 @@ class RouteScreen extends StatelessWidget {
     );
   }
 
-  Widget _buildRouteCard(RouteRecommendation route, bool isRecommended) {
+  Widget _buildRouteCard(BuildContext context, RouteRecommendation route, bool isRecommended) {
     final color = _getSafetyColor(route.safetyScore);
     final typeIcon = _getRouteTypeIcon(route.type);
 
@@ -225,15 +226,25 @@ class RouteScreen extends StatelessWidget {
                   ),
                 ],
               ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: Colors.green,
-                  borderRadius: BorderRadius.circular(15),
-                ),
-                child: Text(
-                  "Navigate",
-                  style: TextStyle(color: Colors.white, fontSize: 12),
+              GestureDetector(
+                onTap: () => _openMapsNavigation(context, route),
+                child: Container(
+                  padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: Colors.green,
+                    borderRadius: BorderRadius.circular(15),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.navigation, size: 14, color: Colors.white),
+                      SizedBox(width: 4),
+                      Text(
+                        "Navigate",
+                        style: TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ],
@@ -268,6 +279,39 @@ class RouteScreen extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _openMapsNavigation(BuildContext context, RouteRecommendation route) async {
+    final center = LatLng(0.3476, 32.5825);
+    final googleMapsUrl = Uri.parse(
+      'https://www.google.com/maps/dir/?api=1&destination=${center.latitude},${center.longitude}&travelmode=driving',
+    );
+
+    final appleMapsUrl = Uri.parse(
+      'https://maps.apple.com/?daddr=${center.latitude},${center.longitude}&dirflg=d',
+    );
+
+    try {
+      if (await canLaunchUrl(googleMapsUrl)) {
+        await launchUrl(googleMapsUrl, mode: LaunchMode.externalApplication);
+      } else if (await canLaunchUrl(appleMapsUrl)) {
+        await launchUrl(appleMapsUrl, mode: LaunchMode.externalApplication);
+      } else {
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text("Unable to open maps. You can navigate to: ${route.name}"),
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Error opening maps: $e")),
+        );
+      }
+    }
   }
 
   Widget _buildRouteTips(RouteService service) {
