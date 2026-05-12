@@ -10,12 +10,16 @@ import 'services/visibility_service.dart';
 import 'services/offline_storage_service.dart';
 import 'services/route_service.dart';
 import 'services/motion_sensor_service.dart';
+import 'services/settings_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   
   final storage = OfflineStorageService();
   await storage.init();
+  
+  final settingsService = SettingsService();
+  await settingsService.init();
   
   final tripService = TripService();
   tripService.setStorage(storage);
@@ -24,8 +28,9 @@ void main() async {
   runApp(
     MultiProvider(
       providers: [
+        ChangeNotifierProvider.value(value: settingsService),
         ChangeNotifierProvider.value(value: tripService),
-        ChangeNotifierProvider(create: (_) => SpeedAlertService()),
+        ChangeNotifierProvider(create: (_) => SpeedAlertService(settingsService: settingsService)),
         ChangeNotifierProvider(create: (_) => SpeedService()),
         ChangeNotifierProvider(create: (_) => RouteService()),
         ChangeNotifierProvider(create: (_) => GpsSpeedService()),

@@ -3,6 +3,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:vibration/vibration.dart';
 import '../models/speed_calculator.dart';
+import 'settings_service.dart';
 
 class SpeedAlertService extends ChangeNotifier {
   int _alertThreshold = 10;
@@ -25,6 +26,8 @@ class SpeedAlertService extends ChangeNotifier {
   int _ttsAttempts = 0;
   static const int _maxTtsAttempts = 2;
 
+  SettingsService? _settingsService;
+
   static const _alertCooldown = Duration(seconds: 5);
   static const _zoneApproachingCooldown = Duration(seconds: 60);
   static const _zoneEnteringCooldown = Duration(seconds: 30);
@@ -32,8 +35,10 @@ class SpeedAlertService extends ChangeNotifier {
   final AudioPlayer _audioPlayer = AudioPlayer();
   final FlutterTts _tts = FlutterTts();
 
-  SpeedAlertService() {
+  SpeedAlertService({SettingsService? settingsService}) {
+    _settingsService = settingsService;
     _initTts();
+    _loadSettings();
   }
 
   int get alertThreshold => _alertThreshold;
@@ -47,43 +52,74 @@ class SpeedAlertService extends ChangeNotifier {
   bool get ttsAvailable => _ttsAvailable;
   bool get ttsInitialized => _ttsInitialized;
 
+  Future<void> _loadSettings() async {
+    if (_settingsService == null) return;
+    final settings = await _settingsService!.loadAlertSettings();
+    _enableSound = settings.enableSound;
+    _enableVibration = settings.enableVibration;
+    _enableZoneAlerts = settings.enableZoneAlerts;
+    _warningAheadSpeed = settings.warningAheadSpeed;
+    _criticalAheadSpeed = settings.criticalAheadSpeed;
+    notifyListeners();
+  }
+
+  Future<void> _saveSettings() async {
+    if (_settingsService == null) return;
+    final settings = AlertSettings(
+      enableSound: _enableSound,
+      enableVibration: _enableVibration,
+      enableZoneAlerts: _enableZoneAlerts,
+      warningAheadSpeed: _warningAheadSpeed,
+      criticalAheadSpeed: _criticalAheadSpeed,
+    );
+    await _settingsService!.saveAlertSettings(settings);
+  }
+
   void setAlertThreshold(int value) {
     _alertThreshold = value.clamp(0, 30);
+    _saveSettings();
     notifyListeners();
   }
 
   void setEnableSound(bool value) {
     _enableSound = value;
+    _saveSettings();
     notifyListeners();
   }
 
   void setEnableVibration(bool value) {
     _enableVibration = value;
+    _saveSettings();
     notifyListeners();
   }
 
   void setEnableVoice(bool value) {
     _enableVoice = value;
+    _saveSettings();
     notifyListeners();
   }
 
   void setEnableNotifications(bool value) {
     _enableNotifications = value;
+    _saveSettings();
     notifyListeners();
   }
 
   void setEnableZoneAlerts(bool value) {
     _enableZoneAlerts = value;
+    _saveSettings();
     notifyListeners();
   }
 
   void setWarningAheadSpeed(int value) {
     _warningAheadSpeed = value.clamp(0, 20);
+    _saveSettings();
     notifyListeners();
   }
 
   void setCriticalAheadSpeed(int value) {
     _criticalAheadSpeed = value.clamp(5, 30);
+    _saveSettings();
     notifyListeners();
   }
 
@@ -131,8 +167,13 @@ class SpeedAlertService extends ChangeNotifier {
   }
 
   Future<void> testTts() async {
+    if (!_ttsAvailable) {
+      debugPrint('[AlertService] TTS: Not available');
+      return;
+    }
     debugPrint('[AlertService] TTS: Running test');
-    await _speakAlert("Testing text to speech. If you hear this, T T S is working correctly.");
+    await _tts.stop();
+    await _tts.speak("Testing text to speech. If you hear this, T T S is working correctly.");
   }
 
   AlertLevel checkSpeed(int currentSpeed, int recommendedSpeed) {
@@ -427,47 +468,3 @@ class SpeedAlertService extends ChangeNotifier {
 }
 
 enum AlertLevel { safe, caution, warning, critical }
-
-class AlertSettings {
-  final int threshold;
-  final bool sound;
-  final bool vibration;
-  final bool voice;
-  final bool notifications;
-  final bool zoneAlerts;
-  final int warningAhead;
-  final int criticalAhead;
-
-  const AlertSettings({
-    required this.threshold,
-    required this.sound,
-    required this.vibration,
-    this.voice = true,
-    required this.notifications,
-    this.zoneAlerts = true,
-    required this.warningAhead,
-    required this.criticalAhead,
-  });
-
-  Map<String, dynamic> toJson() => {
-    'threshold': threshold,
-    'sound': sound,
-    'vibration': vibration,
-    'voice': voice,
-    'notifications': notifications,
-    'zoneAlerts': zoneAlerts,
-    'warningAhead': warningAhead,
-    'criticalAhead': criticalAhead,
-  };
-
-  factory AlertSettings.fromJson(Map<String, dynamic> json) => AlertSettings(
-    threshold: json['threshold'] ?? 10,
-    sound: json['sound'] ?? true,
-    vibration: json['vibration'] ?? true,
-    voice: json['voice'] ?? true,
-    notifications: json['notifications'] ?? true,
-    zoneAlerts: json['zoneAlerts'] ?? true,
-    warningAhead: json['warningAhead'] ?? 5,
-    criticalAhead: json['criticalAhead'] ?? 15,
-  );
-}
