@@ -3,6 +3,7 @@ import 'package:flutter/material.dart' hide DayPeriod;
 import '../models/speed_calculator.dart';
 import '../models/trip_data.dart';
 import 'offline_storage_service.dart';
+import 'cloud_upload_service.dart';
 
 class DrivingRecord {
   final int speed;
@@ -25,6 +26,7 @@ class TripService extends ChangeNotifier {
   TripData? _currentTrip;
   bool _isTracking = false;
   OfflineStorageService? _storage;
+  CloudUploadService? _cloudUploadService;
 
   final List<DrivingRecord> _drivingRecords = [];
   Timer? _recordingTimer;
@@ -35,6 +37,10 @@ class TripService extends ChangeNotifier {
 
   void setStorage(OfflineStorageService storage) {
     _storage = storage;
+  }
+
+  void setCloudUploadService(CloudUploadService service) {
+    _cloudUploadService = service;
   }
 
   Future<void> loadTrips() async {
@@ -302,16 +308,28 @@ class TripService extends ChangeNotifier {
     notifyListeners();
   }
 
-  void endTrip() {
+  Future<void> endTrip() async {
     if (_currentTrip != null) {
       stopRecording();
       final completedTrip = _currentTrip!.copyWith(endTime: DateTime.now());
       _trips.add(completedTrip);
       _currentTrip = null;
       _isTracking = false;
-      _saveTrips();
+      await _saveTrips();
+
+      if (_cloudUploadService != null) {
+        final settings = await _getSettingsService();
+        if (settings?.autoUploadEnabled == true) {
+          _cloudUploadService!.uploadTrip(completedTrip);
+        }
+      }
+
       notifyListeners();
     }
+  }
+
+  Future<dynamic> _getSettingsService() async {
+    return null;
   }
 
   Future<void> deleteTrip(String id) async {

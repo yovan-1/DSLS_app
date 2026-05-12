@@ -1,11 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/alert_service.dart';
+import '../services/settings_service.dart';
 import 'how_it_works_page.dart';
 import 'safety_disclaimer_page.dart';
 import 'developers_page.dart';
 import 'contact_us_page.dart';
 import 'feedback_page.dart';
+import 'cloud_sync_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -41,36 +43,43 @@ class SettingsScreen extends StatelessWidget {
           const SizedBox(height: 12),
 
           _SettingsCard(
+            title: "Cloud Sync",
+            subtitle: "Upload trip data to AWS S3",
+            icon: Icons.cloud_upload,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const CloudSyncScreen()),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          _SettingsCard(
             title: "How It Works",
-            onTap:
-                () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const HowItWorksPage()),
-                ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const HowItWorksPage()),
+            ),
           ),
 
           const SizedBox(height: 12),
 
           _SettingsCard(
             title: "Safety Disclaimer",
-            onTap:
-                () => Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => const SafetyDisclaimerPage(),
-                  ),
-                ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SafetyDisclaimerPage()),
+            ),
           ),
 
           const SizedBox(height: 12),
 
           _SettingsCard(
             title: "Developers",
-            onTap:
-                () => Navigator.push(
-                  context,
-                  MaterialPageRoute(builder: (_) => const DevelopersPage()),
-                ),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const DevelopersPage()),
+            ),
           ),
 
           const SizedBox(height: 40),
@@ -79,13 +88,10 @@ class SettingsScreen extends StatelessWidget {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed:
-                      () => Navigator.push(
-                        context,
-                        MaterialPageRoute(
-                          builder: (_) => const ContactUsPage(),
-                        ),
-                      ),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const ContactUsPage()),
+                  ),
                   icon: const Icon(Icons.email_outlined),
                   label: const Text("Contact Us"),
                   style: OutlinedButton.styleFrom(
@@ -96,11 +102,10 @@ class SettingsScreen extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed:
-                      () => Navigator.push(
-                        context,
-                        MaterialPageRoute(builder: (_) => const FeedbackPage()),
-                      ),
+                  onPressed: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => const FeedbackPage()),
+                  ),
                   icon: const Icon(Icons.feedback_outlined),
                   label: const Text("Feedback"),
                   style: OutlinedButton.styleFrom(
@@ -114,6 +119,7 @@ class SettingsScreen extends StatelessWidget {
       ),
     );
   }
+}
 }
 
 class _AlertSettingsSection extends StatelessWidget {
@@ -307,9 +313,16 @@ class _ThresholdSetting extends StatelessWidget {
 
 class _SettingsCard extends StatelessWidget {
   final String title;
+  final String? subtitle;
+  final IconData? icon;
   final VoidCallback onTap;
 
-  const _SettingsCard({required this.title, required this.onTap});
+  const _SettingsCard({
+    required this.title,
+    this.subtitle,
+    this.icon,
+    required this.onTap,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -321,6 +334,8 @@ class _SettingsCard extends StatelessWidget {
           title,
           style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w500),
         ),
+        subtitle: subtitle != null ? Text(subtitle!) : null,
+        leading: icon != null ? Icon(icon, color: Colors.blue) : null,
         trailing: const Icon(Icons.chevron_right),
         contentPadding: const EdgeInsets.symmetric(
           horizontal: 20,

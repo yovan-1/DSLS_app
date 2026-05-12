@@ -11,6 +11,11 @@ class TripData {
   final int avgSpeed;
   final int overSpeedCount;
   final List<SpeedAlert> alerts;
+  final String? roadSegmentId;
+  final int? actualSpeedLimit;
+  final String? estimatedSurface;
+  final double avgRiskScore;
+  final int distanceTraveledMeters;
 
   TripData({
     required this.id,
@@ -23,6 +28,11 @@ class TripData {
     this.avgSpeed = 0,
     this.overSpeedCount = 0,
     this.alerts = const [],
+    this.roadSegmentId,
+    this.actualSpeedLimit,
+    this.estimatedSurface,
+    this.avgRiskScore = 0.0,
+    this.distanceTraveledMeters = 0,
   });
 
   TripData copyWith({
@@ -31,6 +41,11 @@ class TripData {
     int? avgSpeed,
     int? overSpeedCount,
     List<SpeedAlert>? alerts,
+    String? roadSegmentId,
+    int? actualSpeedLimit,
+    String? estimatedSurface,
+    double? avgRiskScore,
+    int? distanceTraveledMeters,
   }) {
     return TripData(
       id: id,
@@ -43,6 +58,11 @@ class TripData {
       avgSpeed: avgSpeed ?? this.avgSpeed,
       overSpeedCount: overSpeedCount ?? this.overSpeedCount,
       alerts: alerts ?? this.alerts,
+      roadSegmentId: roadSegmentId ?? this.roadSegmentId,
+      actualSpeedLimit: actualSpeedLimit ?? this.actualSpeedLimit,
+      estimatedSurface: estimatedSurface ?? this.estimatedSurface,
+      avgRiskScore: avgRiskScore ?? this.avgRiskScore,
+      distanceTraveledMeters: distanceTraveledMeters ?? this.distanceTraveledMeters,
     );
   }
 
@@ -71,6 +91,11 @@ class TripData {
     'avgSpeed': avgSpeed,
     'overSpeedCount': overSpeedCount,
     'alerts': alerts.map((a) => a.toJson()).toList(),
+    'roadSegmentId': roadSegmentId,
+    'actualSpeedLimit': actualSpeedLimit,
+    'estimatedSurface': estimatedSurface,
+    'avgRiskScore': avgRiskScore,
+    'distanceTraveledMeters': distanceTraveledMeters,
   };
 
   factory TripData.fromJson(Map<String, dynamic> json) => TripData(
@@ -88,6 +113,11 @@ class TripData {
             ?.map((a) => SpeedAlert.fromJson(a))
             .toList() ??
         [],
+    roadSegmentId: json['roadSegmentId'],
+    actualSpeedLimit: json['actualSpeedLimit'],
+    estimatedSurface: json['estimatedSurface'],
+    avgRiskScore: (json['avgRiskScore'] ?? 0.0).toDouble(),
+    distanceTraveledMeters: json['distanceTraveledMeters'] ?? 0,
   );
 }
 

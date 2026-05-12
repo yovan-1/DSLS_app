@@ -11,6 +11,7 @@ import 'services/offline_storage_service.dart';
 import 'services/route_service.dart';
 import 'services/motion_sensor_service.dart';
 import 'services/settings_service.dart';
+import 'services/cloud_upload_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -21,8 +22,11 @@ void main() async {
   final settingsService = SettingsService();
   await settingsService.init();
   
+  final cloudUploadService = CloudUploadService(settingsService: settingsService);
+  
   final tripService = TripService();
   tripService.setStorage(storage);
+  tripService.setCloudUploadService(cloudUploadService);
   await tripService.loadTrips();
   
   runApp(
@@ -30,6 +34,7 @@ void main() async {
       providers: [
         ChangeNotifierProvider.value(value: settingsService),
         ChangeNotifierProvider.value(value: tripService),
+        ChangeNotifierProvider.value(value: cloudUploadService),
         ChangeNotifierProvider(create: (_) => SpeedAlertService(settingsService: settingsService)),
         ChangeNotifierProvider(create: (_) => SpeedService()),
         ChangeNotifierProvider(create: (_) => RouteService()),
