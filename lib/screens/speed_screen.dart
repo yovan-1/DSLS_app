@@ -66,7 +66,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
     });
     alertService.resetAlertState();
     _recordTimer?.cancel();
-    _recordTimer = Timer.periodic(const Duration(milliseconds: 100), (timer) {
+    _recordTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
       if (!gpsService.isTracking) {
         _stopRecording(tripService);
         return;

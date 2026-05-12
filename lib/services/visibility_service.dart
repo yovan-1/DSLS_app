@@ -16,6 +16,15 @@ class VisibilityService extends ChangeNotifier {
   Timer? _brightnessTimer;
   List<CameraDescription>? _cameras;
 
+  static const int _minIntervalSeconds = 5;
+  static const int _maxIntervalSeconds = 30;
+  static const double _stabilityThreshold = 0.10;
+
+  final List<double> _brightnessHistory = [];
+  static const int _historySize = 5;
+  int _currentIntervalSeconds = _minIntervalSeconds;
+  bool _isStable = true;
+
   double get ambientBrightness => _ambientBrightness;
   bool get isInitialized => _isInitialized;
   bool get permissionDenied => _permissionDenied;
@@ -63,29 +72,83 @@ class VisibilityService extends ChangeNotifier {
   }
 
   void _startBrightnessMonitoring() {
-    _brightnessTimer = Timer.periodic(const Duration(seconds: 5), (_) async {
-      if (_cameraController != null && _cameraController!.value.isInitialized) {
-        try {
-          final image = await _cameraController!.takePicture();
-          final brightness = await _calculateBrightness(image.path);
-          final cameraLevel = _mapBrightnessToVisibility(brightness);
-          final hasChanged = brightness != _ambientBrightness ||
-              cameraLevel != _cameraVisibilityLevel ||
-              cameraLevel != _visibilityLevel;
+    _currentIntervalSeconds = _minIntervalSeconds;
+    _isStable = true;
+    _brightnessHistory.clear();
+    _scheduleNextCheck();
+  }
 
-          _ambientBrightness = brightness;
-          _cameraVisibilityLevel = cameraLevel;
-          _visibilityLevel = cameraLevel;
-          await File(image.path).delete();
-
-          if (hasChanged) {
-            notifyListeners();
-          }
-        } catch (e) {
-          debugPrint("Error calculating brightness: $e");
-        }
-      }
+  void _scheduleNextCheck() {
+    _brightnessTimer?.cancel();
+    _brightnessTimer = Timer(Duration(seconds: _currentIntervalSeconds), () {
+      _captureAndProcessBrightness();
     });
+  }
+
+  Future<void> _captureAndProcessBrightness() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) {
+      _scheduleNextCheck();
+      return;
+    }
+
+    try {
+      final image = await _cameraController!.takePicture();
+      final brightness = await _calculateBrightness(image.path);
+      final cameraLevel = _mapBrightnessToVisibility(brightness);
+      final hasChanged = brightness != _ambientBrightness ||
+          cameraLevel != _cameraVisibilityLevel ||
+          cameraLevel != _visibilityLevel;
+
+      _updateBrightnessHistory(brightness);
+      _updateStabilityStatus();
+
+      _ambientBrightness = brightness;
+      _cameraVisibilityLevel = cameraLevel;
+      _visibilityLevel = cameraLevel;
+      
+      try {
+        await File(image.path).delete();
+      } catch (_) {}
+
+      if (hasChanged) {
+        notifyListeners();
+      }
+
+      _scheduleNextCheck();
+    } catch (e) {
+      debugPrint("Error calculating brightness: $e");
+      _scheduleNextCheck();
+    }
+  }
+
+  void _updateBrightnessHistory(double brightness) {
+    _brightnessHistory.add(brightness);
+    if (_brightnessHistory.length > _historySize) {
+      _brightnessHistory.removeAt(0);
+    }
+  }
+
+  void _updateStabilityStatus() {
+    if (_brightnessHistory.length < 3) {
+      _isStable = false;
+      _currentIntervalSeconds = _minIntervalSeconds;
+      return;
+    }
+
+    final recent = _brightnessHistory.sublist(_brightnessHistory.length - 3);
+    final avg = recent.reduce((a, b) => a + b) / recent.length;
+    final variance = recent.map((b) => (b - avg).abs() / avg).reduce((a, b) => a + b) / recent.length;
+
+    _isStable = variance < _stabilityThreshold;
+
+    if (_isStable) {
+      _currentIntervalSeconds = (_currentIntervalSeconds + 5).clamp(
+        _minIntervalSeconds,
+        _maxIntervalSeconds,
+      );
+    } else {
+      _currentIntervalSeconds = _minIntervalSeconds;
+    }
   }
 
   VisibilityLevel _mapBrightnessToVisibility(double brightness) {

@@ -34,10 +34,70 @@ class LocationSpeedResult {
   );
 }
 
+class _SpatialGrid {
+  static const double _cellSizeDegrees = 0.009;
+  final Map<String, List<SpeedZone>> _cells = {};
+  List<SpeedZone> _allZones = [];
+
+  void buildIndex(List<SpeedZone> zones) {
+    _cells.clear();
+    _allZones = List.from(zones);
+
+    for (final zone in zones) {
+      final key = _getCellKey(zone.latitude, zone.longitude);
+      _cells.putIfAbsent(key, () => []).add(zone);
+
+      for (final neighborKey in _getNeighborKeys(zone.latitude, zone.longitude)) {
+        _cells.putIfAbsent(neighborKey, () => []);
+      }
+    }
+  }
+
+  List<SpeedZone> getZonesNear(double lat, double lon) {
+    final centerKey = _getCellKey(lat, lon);
+    final Set<SpeedZone> nearby = {};
+
+    nearby.addAll(_cells[centerKey] ?? []);
+
+    for (final key in _getNeighborKeys(lat, lon)) {
+      nearby.addAll(_cells[key] ?? []);
+    }
+
+    if (nearby.isEmpty) {
+      return _allZones;
+    }
+
+    return nearby.toList();
+  }
+
+  String _getCellKey(double lat, double lon) {
+    final latCell = (lat / _cellSizeDegrees).floor();
+    final lonCell = (lon / _cellSizeDegrees).floor();
+    return '$latCell,$lonCell';
+  }
+
+  List<String> _getNeighborKeys(double lat, double lon) {
+    final latCell = (lat / _cellSizeDegrees).floor();
+    final lonCell = (lon / _cellSizeDegrees).floor();
+
+    return [
+      '${latCell - 1},${lonCell - 1}',
+      '${latCell - 1},$lonCell',
+      '${latCell - 1},${lonCell + 1}',
+      '$latCell,${lonCell - 1}',
+      '$latCell,${lonCell + 1}',
+      '${latCell + 1},${lonCell - 1}',
+      '${latCell + 1},$lonCell',
+      '${latCell + 1},${lonCell + 1}',
+    ];
+  }
+}
+
 class LocationSpeedService extends ChangeNotifier {
   final List<SpeedZone> _zones = [];
   final List<RoadSegment> _roads = [];
-  
+  final _SpatialGrid _spatialGrid = _SpatialGrid();
+
   LocationSpeedResult _currentResult = LocationSpeedResult.defaultResult;
   double? _currentLat;
   double? _currentLon;
@@ -54,6 +114,7 @@ class LocationSpeedService extends ChangeNotifier {
     _zones.addAll(zones);
     _roads.clear();
     _roads.addAll(roads);
+    _spatialGrid.buildIndex(zones);
     _isInitialized = true;
     notifyListeners();
   }
@@ -74,7 +135,9 @@ class LocationSpeedService extends ChangeNotifier {
     final lat = _currentLat!;
     final lon = _currentLon!;
 
-    for (final zone in _zones) {
+    final nearbyZones = _spatialGrid.getZonesNear(lat, lon);
+
+    for (final zone in nearbyZones) {
       final distance = LocationUtils.haversineDistance(
         lat,
         lon,
