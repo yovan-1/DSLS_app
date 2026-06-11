@@ -15,7 +15,7 @@
 #turn,Ibanda junction,-0.5981443,30.60997,40,30,junction
 #residential, Kihumuru Hostel, -0.5950541, 30.59449,30,40,hostel
 #residential,Karo's Garden,-0.6031527, 30.62440,35,25,reidential
-#area_test,test_zone,-0.6074281, 30.62831,10,10,residential_test
+#area_test,test_zone,-0.6074281,30.62831,10,10,residential_test
 
 # ============ ROADS (Lines) ============
 # Format: id,name,startLat,startLon,endLat,endLon,speedLimit,widthMeters,type

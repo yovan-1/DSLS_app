@@ -120,7 +120,6 @@ class SettingsScreen extends StatelessWidget {
     );
   }
 }
-}
 
 class _AlertSettingsSection extends StatelessWidget {
   @override

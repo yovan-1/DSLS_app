@@ -2,7 +2,7 @@ import 'package:flutter/material.dart';
 import '../models/speed_calculator.dart';
 import '../models/trip_data.dart';
 import '../services/trip_service.dart';
-import 'trip_details_screen.dart';
+import '../screens/trip_details_screen.dart';
 
 class TripListItem extends StatelessWidget {
   final TripData trip;

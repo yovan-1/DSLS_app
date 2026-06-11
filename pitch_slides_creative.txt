@@ -1,0 +1,171 @@
+Create a stunning, visually immersive HTML presentation using reveal.js for a mobile app pitch.
+
+---
+
+PROJECT OVERVIEW
+
+App Name: DSLS (Dynamic Speed Limit System)
+Tagline: "Drive Smarter. Drive Safer."
+Type: Mobile application (Android/iOS)
+
+---
+
+DESIGN AESTHETICS
+
+Theme: Premium dark mode with cinematic feel
+Background: Deep gradient from #0f0c29 → #302b63 → #24243e (midnight purple)
+Accent Colors:
+- Primary: #7B68EE (Medium Slate Blue)
+- Secondary: #FFD700 (Gold)
+- Tertiary: #00CED1 (Dark Turquoise)
+- Success: #00FF7F (Spring Green)
+- Danger: #FF6B6B (Coral Red)
+
+Typography:
+- Headlines: 'Playfair Display', serif (elegant, premium)
+- Body: 'Inter', sans-serif (clean, modern)
+- Code/Tech: 'Fira Code', monospace
+
+Visual Style:
+- Glassmorphism cards with backdrop blur
+- Subtle gradient borders
+- Floating 3D-like elements
+- Particle background effects
+- Smooth 60fps animations
+
+---
+
+SLIDE STRUCTURE (12 Slides)
+
+**Slide 1: Title Hero**
+- Large animated gradient text "DSLS"
+- Tagline: "Dynamic Speed Limit System"
+- Subtext: "Drive Smarter. Drive Safer."
+- Background: Abstract road/lights artwork (use Unsplash/Pexels car/roadnight image)
+- Floating car icon animation
+- CTA button: "Start Journey"
+
+**Slide 2: The Problem**
+- Split layout: Left side stats, right side illustration
+- Stats to display:
+  - "30% of traffic deaths caused by speeding"
+  - "1.3 million lives lost annually worldwide"
+  - "Average driver exceeds speed limit 3x per trip"
+- Image: Dramatic highway at night (Unsplash: speeding car tail lights)
+- Red accent for urgency
+
+**Slide 3: Our Solution**
+- Center: Phone mockup showing app interface
+- Animated floating elements around phone:
+  - Speed dial icon
+  - Warning alert icon
+  - Map pin icon
+  - Score badge
+- Tagline: "AI-powered intelligent speed companion"
+- Background: Gradient with subtle grid pattern
+
+**Slide 4: Key Feature - Dynamic Speed**
+- Large illustration: Stylized road with changing weather elements
+- Feature: "Smart Speed Recommendations"
+- Description: "Adapts to road type, weather, time, traffic in real-time"
+- Visual elements: Sun, rain, fog, night icons around road
+- Use icons from FontAwesome or similar
+
+**Slide 5: Key Feature - Safety Alerts**
+- Illustration: Dashboard with warning lights concept
+- Feature: "Real-time Safety Alerts"
+- Description: "Instant notifications for speeding, harsh maneuvers, lane departure"
+- Visual: Animated warning bell, vibration wave effect
+- Color: Orange/gold accent
+
+**Slide 6: Key Feature - Driver Score**
+- Feature: "Your Safety Score"
+- Visual: Circular progress chart (animated)
+- Score example: "87 - Excellent Driver"
+- Metrics below: Acceleration, Braking, Cornering, Speed
+- Use fl_chart-style visualization
+- Background: Subtle fingerprint/score pattern
+
+**Slide 7: Key Feature - Zone Monitoring**
+- Illustration: Map with highlighted zones (school, construction, camera)
+- Feature: "Smart Zone Alerts"
+- Description: "GPS-powered warnings for special zones"
+- Visual: Color-coded pins (red=school, yellow=construction, blue=camera)
+- Map background using static map image or stylized map
+
+**Slide 8: Key Feature - Camera Integration**
+- Illustration: Phone camera view with road sign overlay
+- Feature: "Road Sign Recognition"
+- Description: "Capture and analyze speed limit signs"
+- Visual: Camera frame with detected speed limit "60" inside
+- Animated scanning effect
+
+**Slide 9: Key Feature - Analytics Dashboard**
+- Illustration: Dashboard with multiple charts (line, bar, pie)
+- Feature: "Deep Analytics"
+- Description: "Track trends, set goals, improve over time"
+- Visual: Screenshot mockup of analytics screen
+- Charts: Weekly score trend, trip history, behavior breakdown
+
+**Slide 10: Technology Stack**
+- Grid of tech logos/badges:
+  - Flutter (blue)
+  - Dart
+  - Google Maps / flutter_map
+  - Provider (state)
+  - SQLite
+  - TensorFlow Lite (future AI)
+- Style: Pill-shaped badges with icons
+- Background: Tech circuit pattern
+
+**Slide 11: Market Opportunity**
+- Large typography numbers:
+  - "$4.2B" - Global dashcam/safety market
+  - "2.5B" - Smartphone users
+  - "45%" - Growth rate
+- Illustration: World map with highlighted regions
+- Subtext: "Every driver is a potential user"
+
+**Slide 12: Call to Action**
+- Large centered text: "Let's Build the Future of Driving Safety"
+- Contact cards with icons:
+  - Email icon + your email
+  - Phone icon + your phone
+  - Website/LinkedIn placeholder
+- Animated gradient button: "Partner With Us"
+- Background: Highway stretching to horizon (Unsplash)
+
+---
+
+SPECIAL EFFECTS
+
+1. **Background**: Animated gradient mesh or particle system
+2. **Transitions**: Smooth fade + slight scale (zoom-in)
+3. **Slide Numbers**: Bottom right, subtle
+4. **Progress Bar**: Top of screen, gradient
+5. **Fragments**: Bullet points appear one by one with fade
+6. **Hover Effects**: Cards lift and glow on hover
+
+---
+
+IMAGE SOURCES (use these URLs as placeholders)
+
+- Road/Night: https://images.unsplash.com/photo-1492144534655-ae79c964c9d7?w=800
+- Highway: https://images.unsplash.com/photo-1469854523086-cc02fe5d8800?w=800
+- Dashboard: https://images.unsplash.com/photo-1542282088-fe8426682b8f?w=800
+- Phone Mockup: https://images.unsplash.com/photo-1512941937669-90a1b58e7e9c?w=800
+- World Map: https://images.unsplash.com/photo-1524661135-423995f22d0b?w=800
+
+---
+
+DELIVERABLE
+
+Single HTML file with:
+- Embedded CSS (no external stylesheets except fonts)
+- reveal.js from CDN
+- All slide content inline
+- Smooth animations
+- Responsive design
+- Keyboard navigation enabled
+
+Make it absolutely stunning - this is for a high-stakes pitch!
