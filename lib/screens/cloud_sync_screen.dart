@@ -5,9 +5,7 @@ import '../services/cloud_upload_service.dart';
 import '../services/trip_service.dart';
 
 class CloudSyncScreen extends StatefulWidget {
-  final Function(int)? onBack;
-
-  const CloudSyncScreen({super.key, this.onBack});
+  const CloudSyncScreen({super.key});
 
   @override
   State<CloudSyncScreen> createState() => _CloudSyncScreenState();
@@ -93,8 +91,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     setState(() => _isTesting = true);
 
     try {
-      final settings = context.read<SettingsService>();
-      final cloudService = CloudUploadService(settingsService: settings);
+      final cloudService = context.read<CloudUploadService>();
       final success = await cloudService.testConnection();
 
       if (mounted) {
@@ -152,8 +149,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     setState(() => _isUploading = true);
 
     try {
-      final settings = context.read<SettingsService>();
-      final cloudService = CloudUploadService(settingsService: settings);
+      final cloudService = context.read<CloudUploadService>();
       int uploaded = 0;
 
       for (final trip in trips) {
@@ -191,7 +187,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
         elevation: 1,
         leading: IconButton(
           icon: const Icon(Icons.arrow_back),
-          onPressed: () => widget.onBack?.call(0),
+          onPressed: () => Navigator.of(context).pop(),
         ),
       ),
       body: Consumer<SettingsService>(

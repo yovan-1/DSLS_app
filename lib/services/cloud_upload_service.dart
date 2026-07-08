@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import 'package:uuid/uuid.dart';
@@ -8,10 +9,6 @@ import 'settings_service.dart';
 
 class CloudUploadService extends ChangeNotifier {
   final SettingsService _settingsService;
-  
-  static const String _defaultBucket = 'dsls-trip-data';
-  static const String _defaultRegion = 'us-east-1';
-  static const String _apiVersion = '2023-01-01';
 
   bool _isUploading = false;
   bool _testInProgress = false;
@@ -193,29 +190,14 @@ class CloudUploadService extends ChangeNotifier {
     required Uint8List data,
     required String contentType,
   }) async {
-    final host = '${credentials.bucketName}.s3.${credentials.region}.amazonaws.com';
-    final url = Uri.parse('https://$host/$key');
-
-    final hash = _calculateSignature(
-      credentials.secretKey,
-      'PUT',
-      contentType,
-      DateTime.now().toUtc().toIso8601String(),
-      '/$key',
-    );
-
     try {
-      final response = await http.put(
-        url,
-        headers: {
-          'Content-Type': contentType,
-          'Content-Length': data.length.toString(),
-          'Authorization': 'AWS ${credentials.accessKey}:$hash',
-          'x-amz-date': DateTime.now().toUtc().toIso8601String(),
-        },
+      final response = await _signedS3Request(
+        credentials: credentials,
+        method: 'PUT',
+        key: key,
         body: data,
-      ).timeout(const Duration(seconds: 30));
-
+        contentType: contentType,
+      );
       return response.statusCode >= 200 && response.statusCode < 300;
     } catch (e) {
       _lastError = e.toString();
@@ -224,28 +206,90 @@ class CloudUploadService extends ChangeNotifier {
   }
 
   Future<void> _deleteFromS3(AwsCredentials credentials, String key) async {
-    final host = '${credentials.bucketName}.s3.${credentials.region}.amazonaws.com';
-    final url = Uri.parse('https://$host/$key');
-
     try {
-      await http.delete(
-        url,
-        headers: {
-          'Authorization': 'AWS ${credentials.accessKey}:signature',
-        },
-      );
+      await _signedS3Request(credentials: credentials, method: 'DELETE', key: key);
     } catch (_) {}
   }
 
-  String _calculateSignature(
+  String _formatAmzDate(DateTime utc) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${utc.year}${two(utc.month)}${two(utc.day)}T${two(utc.hour)}${two(utc.minute)}${two(utc.second)}Z';
+  }
+
+  String _formatDateStamp(DateTime utc) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${utc.year}${two(utc.month)}${two(utc.day)}';
+  }
+
+  List<int> _hmacSha256(List<int> key, List<int> message) =>
+      Hmac(sha256, key).convert(message).bytes;
+
+  List<int> _getSignatureKey(
     String secretKey,
-    String method,
-    String contentType,
-    String date,
-    String canonicalUri,
+    String dateStamp,
+    String region,
+    String service,
   ) {
-    final stringToSign = '$method\n\n$contentType\n$date\n$canonicalUri';
-    return base64.encode(utf8.encode(stringToSign));
+    final kDate = _hmacSha256(utf8.encode('AWS4$secretKey'), utf8.encode(dateStamp));
+    final kRegion = _hmacSha256(kDate, utf8.encode(region));
+    final kService = _hmacSha256(kRegion, utf8.encode(service));
+    return _hmacSha256(kService, utf8.encode('aws4_request'));
+  }
+
+  Future<http.Response> _signedS3Request({
+    required AwsCredentials credentials,
+    required String method,
+    required String key,
+    Uint8List? body,
+    String? contentType,
+  }) async {
+    final payload = body ?? Uint8List(0);
+    final host = '${credentials.bucketName}.s3.${credentials.region}.amazonaws.com';
+    final now = DateTime.now().toUtc();
+    final amzDate = _formatAmzDate(now);
+    final dateStamp = _formatDateStamp(now);
+    final payloadHash = sha256.convert(payload).toString();
+    final canonicalUri = '/$key';
+    final canonicalHeaders =
+        'host:$host\nx-amz-content-sha256:$payloadHash\nx-amz-date:$amzDate\n';
+    const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
+
+    final canonicalRequest =
+        '$method\n$canonicalUri\n\n$canonicalHeaders\n$signedHeaders\n$payloadHash';
+    final credentialScope = '$dateStamp/${credentials.region}/s3/aws4_request';
+    final hashedCanonicalRequest = sha256.convert(utf8.encode(canonicalRequest)).toString();
+    final stringToSign =
+        'AWS4-HMAC-SHA256\n$amzDate\n$credentialScope\n$hashedCanonicalRequest';
+
+    final signingKey = _getSignatureKey(
+      credentials.secretKey,
+      dateStamp,
+      credentials.region,
+      's3',
+    );
+    final signature = _hmacSha256(signingKey, utf8.encode(stringToSign))
+        .map((b) => b.toRadixString(16).padLeft(2, '0'))
+        .join();
+
+    final authorization = 'AWS4-HMAC-SHA256 '
+        'Credential=${credentials.accessKey}/$credentialScope, '
+        'SignedHeaders=$signedHeaders, '
+        'Signature=$signature';
+
+    final headers = <String, String>{
+      'x-amz-date': amzDate,
+      'x-amz-content-sha256': payloadHash,
+      'Authorization': authorization,
+      if (contentType != null) 'Content-Type': contentType,
+    };
+
+    final url = Uri.parse('https://$host/$key');
+    if (method == 'PUT') {
+      return http
+          .put(url, headers: headers, body: payload)
+          .timeout(const Duration(seconds: 30));
+    }
+    return http.delete(url, headers: headers).timeout(const Duration(seconds: 30));
   }
 }
 

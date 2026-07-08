@@ -30,7 +30,7 @@ class _DashboardState extends State<Dashboard> {
     ];
 
     return Scaffold(
-      body: SafeArea(child: screens[currentIndex]),
+      body: SafeArea(child: IndexedStack(index: currentIndex, children: screens)),
       bottomNavigationBar: BottomNav(
         currentIndex: currentIndex,
         onTap: changeTab,

@@ -73,7 +73,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
     _recordTimer?.cancel();
     _recordTimer = Timer.periodic(const Duration(milliseconds: 500), (timer) {
       if (!gpsService.isTracking) {
-        _stopRecording(tripService);
+        _stopRecording(tripService, visibilityService);
         return;
       }
 
@@ -89,7 +89,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
       final lastPos = gpsService.lastPosition;
       if (lastPos != null) {
         speedService.updatePosition(lastPos.latitude, lastPos.longitude);
-        autoParams.updateLocationType(lastPos);
+        autoParams.updateLocationType(speedService.locationResult);
         _refreshWeatherIfNeeded(
           autoParams,
           speedService,
@@ -194,9 +194,10 @@ class _SpeedScreenState extends State<SpeedScreen> {
     }
   }
 
-  void _stopRecording(TripService tripService) {
+  void _stopRecording(TripService tripService, VisibilityService visibilityService) {
     _recordTimer?.cancel();
     _recordTimer = null;
+    visibilityService.stop();
     tripService.endTrip();
     debugPrint('[SpeedScreen] Recording stopped');
   }
@@ -397,7 +398,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
       onPressed: () async {
         if (isMonitoring) {
           await gpsService.stopTracking();
-          _stopRecording(tripService);
+          _stopRecording(tripService, visibilityService);
         } else {
           await gpsService.startTracking();
           if (!context.mounted) return;

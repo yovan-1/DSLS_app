@@ -1,6 +1,8 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'screens/splash_screen.dart';
+import 'screens/dashboard.dart';
 import 'services/trip_service.dart';
 import 'services/speed_service.dart';
 import 'services/alert_service.dart';
@@ -12,40 +14,62 @@ import 'services/route_service.dart';
 import 'services/motion_sensor_service.dart';
 import 'services/settings_service.dart';
 import 'services/cloud_upload_service.dart';
+import 'widgets/error_boundary.dart';
+
+final navigatorKey = GlobalKey<NavigatorState>();
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  
-  final storage = OfflineStorageService();
-  await storage.init();
-  
-  final settingsService = SettingsService();
-  await settingsService.init();
-  
-  final cloudUploadService = CloudUploadService(settingsService: settingsService);
-  
-  final tripService = TripService();
-  tripService.setStorage(storage);
-  tripService.setCloudUploadService(cloudUploadService);
-  await tripService.loadTrips();
-  
-  runApp(
-    MultiProvider(
-      providers: [
-        ChangeNotifierProvider.value(value: settingsService),
-        ChangeNotifierProvider.value(value: tripService),
-        ChangeNotifierProvider.value(value: cloudUploadService),
-        ChangeNotifierProvider(create: (_) => SpeedAlertService(settingsService: settingsService)),
-        ChangeNotifierProvider(create: (_) => SpeedService()),
-        ChangeNotifierProvider(create: (_) => RouteService()),
-        ChangeNotifierProvider(create: (_) => GpsSpeedService()),
-        ChangeNotifierProvider(create: (_) => AutoParametersService()),
-        ChangeNotifierProvider(create: (_) => VisibilityService()),
-        ChangeNotifierProvider(create: (_) => MotionSensorService()),
-      ],
-      child: const MyApp(),
-    ),
-  );
+
+  FlutterError.onError = (details) {
+    FlutterError.presentError(details);
+    debugPrint('[FlutterError] ${details.exceptionAsString()}');
+  };
+
+  ErrorWidget.builder = (details) => AppErrorScreen(
+        error: details.exception,
+        onRestart: () {
+          navigatorKey.currentState?.pushAndRemoveUntil(
+            MaterialPageRoute(builder: (_) => const Dashboard()),
+            (route) => false,
+          );
+        },
+      );
+
+  runZonedGuarded(() async {
+    final storage = OfflineStorageService();
+    await storage.init();
+
+    final settingsService = SettingsService();
+    await settingsService.init();
+
+    final cloudUploadService = CloudUploadService(settingsService: settingsService);
+
+    final tripService = TripService();
+    tripService.setStorage(storage);
+    tripService.setCloudUploadService(cloudUploadService);
+    await tripService.loadTrips();
+
+    runApp(
+      MultiProvider(
+        providers: [
+          ChangeNotifierProvider.value(value: settingsService),
+          ChangeNotifierProvider.value(value: tripService),
+          ChangeNotifierProvider.value(value: cloudUploadService),
+          ChangeNotifierProvider(create: (_) => SpeedAlertService(settingsService: settingsService)),
+          ChangeNotifierProvider(create: (_) => SpeedService()),
+          ChangeNotifierProvider(create: (_) => RouteService()),
+          ChangeNotifierProvider(create: (_) => GpsSpeedService()),
+          ChangeNotifierProvider(create: (_) => AutoParametersService()),
+          ChangeNotifierProvider(create: (_) => VisibilityService()),
+          ChangeNotifierProvider(create: (_) => MotionSensorService()),
+        ],
+        child: const MyApp(),
+      ),
+    );
+  }, (error, stack) {
+    debugPrint('[Uncaught] $error');
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -54,6 +78,7 @@ class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: navigatorKey,
       debugShowCheckedModeBanner: false,
       title: 'Dynamic Speed',
       theme: ThemeData(

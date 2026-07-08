@@ -262,6 +262,27 @@ static int _getVisibilityMultiplier(VisibilityLevel visibility) {
 
 ---
 
+## 3.5 Release Signing
+
+Local release builds (`flutter build apk --release`, `flutter install --release`) are signed with a real, private keystore at `android/app/upload-keystore.jks`, configured via `android/key.properties` (both gitignored — never commit them). If you need to generate your own for a fresh clone:
+
+```bash
+keytool -genkeypair -v -keystore android/app/upload-keystore.jks \
+  -keyalg RSA -keysize 2048 -validity 10000 -alias upload
+```
+
+Then create `android/key.properties`:
+```
+storePassword=<your password>
+keyPassword=<your password>
+keyAlias=upload
+storeFile=upload-keystore.jks
+```
+
+If `android/key.properties` is absent (e.g. in CI), `build.gradle.kts` falls back to the debug keystore and logs a warning — CI-built release APKs are **not** production-signed unless the keystore/passwords are added as GitHub Actions secrets and the workflow is updated to write them out before building.
+
+---
+
 ## 4. Making and Submitting Changes
 
 ### Workflow

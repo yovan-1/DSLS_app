@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 class ContactUsPage extends StatefulWidget {
   const ContactUsPage({super.key});
@@ -28,23 +28,32 @@ class _ContactUsPageState extends State<ContactUsPage> {
 
     setState(() => _isLoading = true);
 
-    try {
-      await Future.delayed(Duration(seconds: 1));
+    final subject = Uri.encodeComponent('DSLS Contact: ${_nameController.text.trim()}');
+    final body = Uri.encodeComponent(
+      'Name: ${_nameController.text.trim()}\n'
+      'Email: ${_emailController.text.trim()}\n\n'
+      '${_messageController.text.trim()}',
+    );
+    final mailUri = Uri.parse('mailto:grbsderrick@gmail.com?subject=$subject&body=$body');
 
-      if (mounted) {
+    try {
+      final launched = await launchUrl(mailUri);
+      if (!mounted) return;
+      if (launched) {
+        Navigator.pop(context);
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Message sent successfully! We'll get back to you soon."),
-            backgroundColor: Colors.green,
+            content: Text('No email app available on this device.'),
+            backgroundColor: Colors.red,
           ),
         );
-        Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Failed to send message: $e"),
+            content: Text('Failed to open email app: $e'),
             backgroundColor: Colors.red,
           ),
         );

@@ -24,6 +24,7 @@ class VisibilityService extends ChangeNotifier {
   static const int _historySize = 5;
   int _currentIntervalSeconds = _minIntervalSeconds;
   bool _isStable = true;
+  bool _isDisposed = false;
 
   double get ambientBrightness => _ambientBrightness;
   bool get isInitialized => _isInitialized;
@@ -33,6 +34,7 @@ class VisibilityService extends ChangeNotifier {
   bool get isAvailable => _isInitialized && !_permissionDenied;
 
   Future<void> initialize() async {
+    if (_isDisposed) return;
     if (_isInitialized || _permissionDenied) return;
 
     try {
@@ -79,13 +81,16 @@ class VisibilityService extends ChangeNotifier {
   }
 
   void _scheduleNextCheck() {
+    if (_isDisposed) return;
     _brightnessTimer?.cancel();
     _brightnessTimer = Timer(Duration(seconds: _currentIntervalSeconds), () {
+      if (_isDisposed) return;
       _captureAndProcessBrightness();
     });
   }
 
   Future<void> _captureAndProcessBrightness() async {
+    if (_isDisposed) return;
     if (_cameraController == null || !_cameraController!.value.isInitialized) {
       _scheduleNextCheck();
       return;
@@ -94,6 +99,8 @@ class VisibilityService extends ChangeNotifier {
     try {
       final image = await _cameraController!.takePicture();
       final brightness = await _calculateBrightness(image.path);
+      if (_isDisposed) return;
+
       final cameraLevel = _mapBrightnessToVisibility(brightness);
       final hasChanged = brightness != _ambientBrightness ||
           cameraLevel != _cameraVisibilityLevel ||
@@ -105,7 +112,7 @@ class VisibilityService extends ChangeNotifier {
       _ambientBrightness = brightness;
       _cameraVisibilityLevel = cameraLevel;
       _visibilityLevel = cameraLevel;
-      
+
       try {
         await File(image.path).delete();
       } catch (_) {}
@@ -250,8 +257,23 @@ class VisibilityService extends ChangeNotifier {
     return values[newIndex];
   }
 
+  Future<void> stop() async {
+    _brightnessTimer?.cancel();
+    _brightnessTimer = null;
+    final controller = _cameraController;
+    _cameraController = null;
+    _isInitialized = false;
+    try {
+      await controller?.dispose();
+    } catch (e) {
+      debugPrint('[VisibilityService] Error disposing camera: $e');
+    }
+    if (!_isDisposed) notifyListeners();
+  }
+
   @override
   void dispose() {
+    _isDisposed = true;
     _brightnessTimer?.cancel();
     _cameraController?.dispose();
     super.dispose();

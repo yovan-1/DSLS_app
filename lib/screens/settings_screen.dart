@@ -8,6 +8,7 @@ import 'developers_page.dart';
 import 'contact_us_page.dart';
 import 'feedback_page.dart';
 import 'cloud_sync_screen.dart';
+import 'route_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
   const SettingsScreen({super.key});
@@ -49,6 +50,18 @@ class SettingsScreen extends StatelessWidget {
             onTap: () => Navigator.push(
               context,
               MaterialPageRoute(builder: (_) => const CloudSyncScreen()),
+            ),
+          ),
+
+          const SizedBox(height: 12),
+
+          _SettingsCard(
+            title: "Route Recommendations",
+            subtitle: "View suggested routes for current conditions",
+            icon: Icons.map,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const RouteScreen()),
             ),
           ),
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class FeedbackPage extends StatefulWidget {
   const FeedbackPage({super.key});
@@ -33,23 +34,30 @@ class _FeedbackPageState extends State<FeedbackPage> {
 
     setState(() => _isLoading = true);
 
-    try {
-      await Future.delayed(Duration(seconds: 1));
+    final subject = Uri.encodeComponent('DSLS Feedback ($_rating/5 stars)');
+    final body = Uri.encodeComponent(
+      'Rating: $_rating/5 (${_getRatingText()})\n\n${_feedbackController.text.trim()}',
+    );
+    final mailUri = Uri.parse('mailto:grbsderrick@gmail.com?subject=$subject&body=$body');
 
-      if (mounted) {
+    try {
+      final launched = await launchUrl(mailUri);
+      if (!mounted) return;
+      if (launched) {
+        Navigator.pop(context);
+      } else {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text("Thank you for your feedback!"),
-            backgroundColor: Colors.green,
+            content: Text('No email app available on this device.'),
+            backgroundColor: Colors.red,
           ),
         );
-        Navigator.pop(context);
       }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text("Failed to submit: $e"),
+            content: Text('Failed to submit: $e'),
             backgroundColor: Colors.red,
           ),
         );

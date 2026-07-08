@@ -1,8 +1,9 @@
 import 'dart:convert';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:encrypt/encrypt.dart' as encrypt;
-import 'package:flutter/services.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 class AlertSettings {
   final bool enableSound;
@@ -86,7 +87,8 @@ class SettingsService extends ChangeNotifier {
   static const String _keyAutoUpload = 'auto_upload_enabled';
   static const String _keyFirstLaunch = 'first_launch_done';
 
-  static const String _appSalt = 'DSLS_v1_SALT_2024';
+  static const _secureStorage = FlutterSecureStorage();
+  static const String _keyMasterSecret = 'aws_cred_master_key';
 
   SharedPreferences? _prefs;
   bool _isInitialized = false;
@@ -128,28 +130,14 @@ class SettingsService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<String?> getDeviceId() async {
-    try {
-      const channel = MethodChannel('com.dsls/app');
-      final deviceId = await channel.invokeMethod<String>('getDeviceId');
-      return deviceId;
-    } catch (e) {
-      final id = await _prefs?.getString('device_fallback_id');
-      if (id == null) {
-        final fallback = DateTime.now().millisecondsSinceEpoch.toString();
-        await _prefs?.setString('device_fallback_id', fallback);
-        return fallback;
-      }
-      return id;
+  Future<encrypt.Key> _getEncryptionKey() async {
+    String? stored = await _secureStorage.read(key: _keyMasterSecret);
+    if (stored == null) {
+      final randomBytes = List<int>.generate(32, (_) => Random.secure().nextInt(256));
+      stored = base64Encode(randomBytes);
+      await _secureStorage.write(key: _keyMasterSecret, value: stored);
     }
-  }
-
-  Future<String> _getEncryptionKey() async {
-    final deviceId = await getDeviceId() ?? 'unknown_device';
-    final keyString = '$deviceId$_appSalt';
-    final bytes = utf8.encode(keyString);
-    final key = encrypt.Key.fromBase64(base64.encode(bytes.take(32).toList()));
-    return base64.encode(bytes.take(32).toList());
+    return encrypt.Key.fromBase64(stored);
   }
 
   Future<void> saveAwsCredentials(AwsCredentials credentials) async {
@@ -157,7 +145,7 @@ class SettingsService extends ChangeNotifier {
       final key = await _getEncryptionKey();
       final iv = encrypt.IV.fromLength(16);
       final encrypter = encrypt.Encrypter(
-        encrypt.AES(encrypt.Key.fromBase64(key), mode: encrypt.AESMode.cbc),
+        encrypt.AES(key, mode: encrypt.AESMode.cbc),
       );
 
       final json = jsonEncode(credentials.toJson());
@@ -186,7 +174,7 @@ class SettingsService extends ChangeNotifier {
 
       final key = await _getEncryptionKey();
       final encrypter = encrypt.Encrypter(
-        encrypt.AES(encrypt.Key.fromBase64(key), mode: encrypt.AESMode.cbc),
+        encrypt.AES(key, mode: encrypt.AESMode.cbc),
       );
 
       final decrypted = encrypter.decrypt(encrypted, iv: iv);

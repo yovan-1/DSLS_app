@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart' hide DayPeriod;
-import 'package:geolocator/geolocator.dart';
 import '../models/speed_calculator.dart';
+import 'location_speed_service.dart';
 
 class AutoParametersService extends ChangeNotifier {
   WeatherCondition _weather = WeatherCondition.clear;
@@ -60,13 +60,10 @@ class AutoParametersService extends ChangeNotifier {
     }
   }
 
-  Future<void> updateLocationType(Position? position) async {
-    if (position == null) return;
-
-    final speed = position.speed * 3.6;
-    final nextLocation = speed < 30
-        ? LocationType.urban
-        : (speed < 70 ? LocationType.suburban : LocationType.highway);
+  void updateLocationType(LocationSpeedResult locationResult) {
+    final nextLocation = locationResult.status != LocationSpeedStatus.none
+        ? locationResult.locationType
+        : LocationType.urban; // conservative, non-speed-derived fallback
 
     if (nextLocation == _location) return;
     _location = nextLocation;

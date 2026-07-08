@@ -7,9 +7,7 @@ import '../services/route_service.dart';
 import '../models/speed_calculator.dart';
 
 class RouteScreen extends StatelessWidget {
-  final Function(int)? onBack;
-
-  const RouteScreen({super.key, this.onBack});
+  const RouteScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -24,7 +22,7 @@ class RouteScreen extends StatelessWidget {
             elevation: 1,
             leading: IconButton(
               icon: Icon(Icons.arrow_back, color: Colors.black),
-              onPressed: () => onBack?.call(0),
+              onPressed: () => Navigator.of(context).pop(),
             ),
             title: Text(
               "Route Recommendations",

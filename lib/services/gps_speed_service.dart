@@ -105,8 +105,11 @@ class GpsSpeedService extends ChangeNotifier {
   static const double _accuracyThreshold = 25.0;
   static const double _spikeThreshold = 0.40;
   static const Duration _staleTimeout = Duration(seconds: 2);
+  static const Duration _accelHoldTimeout = Duration(seconds: 8);
 
   double _accelerometerDerivedSpeed = 0;
+  DateTime? _lastAccelUpdate;
+  bool _isDisposed = false;
 
   final _speedController = StreamController<SpeedUpdate>.broadcast();
   Stream<SpeedUpdate> get speedStream => _speedController.stream;
@@ -141,8 +144,11 @@ class GpsSpeedService extends ChangeNotifier {
   }
 
   void updateFromAccelerometer(double speedMps) {
+    if (_isDisposed) return;
     _accelerometerDerivedSpeed = speedMps * 3.6;
-    _fusionStatus = FusionStatus.accelFusion;
+    _lastAccelUpdate = DateTime.now();
+    _updateFusedSpeed();
+    notifyListeners();
   }
 
   static RiskData _computeRisk(SpeedParameters params, int currentSpeed) {
@@ -245,6 +251,7 @@ class GpsSpeedService extends ChangeNotifier {
   }
 
   void _onPositionUpdate(Position position) {
+    if (_isDisposed) return;
     _lastGpsUpdate = DateTime.now();
     _gpsStatus = GpsStatus.active;
 
@@ -387,6 +394,7 @@ class GpsSpeedService extends ChangeNotifier {
   }
 
   void _checkGpsStatus() {
+    if (_isDisposed) return;
     if (_lastGpsUpdate != null && _gpsStatus == GpsStatus.active) {
       final timeSinceLastUpdate = DateTime.now().difference(_lastGpsUpdate!);
       if (timeSinceLastUpdate.inSeconds > 60) {
@@ -397,23 +405,35 @@ class GpsSpeedService extends ChangeNotifier {
   }
 
   void _checkStaleSpeed() {
-    if (!_isTracking) return;
+    if (_isDisposed || !_isTracking) return;
+
+    _updateFusedSpeed();
 
     if (_lastGpsUpdate != null) {
       final timeSinceLastUpdate = DateTime.now().difference(_lastGpsUpdate!);
 
       if (timeSinceLastUpdate > _staleTimeout) {
-        if (_smoothedSpeed > 5) {
-          _smoothedSpeed = (_smoothedSpeed * 0.7).round();
-          if (_smoothedSpeed < 1) _smoothedSpeed = 0;
-          notifyListeners();
-        } else {
-          _smoothedSpeed = 0;
-          _currentSpeed = 0;
-          notifyListeners();
+        final accelIsFresh = _lastAccelUpdate != null &&
+            DateTime.now().difference(_lastAccelUpdate!) <= _accelHoldTimeout;
+
+        if (!accelIsFresh) {
+          if (_smoothedSpeed > 5) {
+            _smoothedSpeed = (_smoothedSpeed * 0.7).round();
+            if (_smoothedSpeed < 1) _smoothedSpeed = 0;
+          } else {
+            _smoothedSpeed = 0;
+            _currentSpeed = 0;
+          }
+          _accelerometerDerivedSpeed = 0;
+          _updateFusedSpeed();
         }
+        // else: GPS stale but accel fresh — _updateFusedSpeed()'s existing
+        // gpsTrust/accelTrust weighting already leans the blend toward the
+        // accelerometer estimate.
       }
     }
+
+    notifyListeners();
   }
 
   Future<void> stopTracking() async {
@@ -432,6 +452,7 @@ class GpsSpeedService extends ChangeNotifier {
     _gpsStatus = GpsStatus.inactive;
     _cachedRiskData = null;
     _accelerometerDerivedSpeed = 0;
+    _lastAccelUpdate = null;
     _fusionStatus = FusionStatus.gpsOnly;
     _positionHistory.clear();
     _speedHistory.clear();
@@ -443,6 +464,7 @@ class GpsSpeedService extends ChangeNotifier {
 
   @override
   void dispose() {
+    _isDisposed = true;
     _gpsCheckTimer?.cancel();
     _staleSpeedTimer?.cancel();
     _positionStream?.cancel();
