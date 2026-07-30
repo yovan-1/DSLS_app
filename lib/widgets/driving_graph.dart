@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart' hide DayPeriod;
 import 'package:provider/provider.dart';
 import 'package:fl_chart/fl_chart.dart';
+import '../models/speed_model/speed_recommendation.dart';
 import '../services/trip_service.dart';
 
 class DrivingGraph extends StatelessWidget {
@@ -46,17 +47,12 @@ class DrivingGraph extends StatelessWidget {
     for (int i = 0; i < records.length; i++) {
       speedSpots.add(FlSpot(i.toDouble(), records[i].speed.toDouble()));
 
-      int riskValue;
-      switch (records[i].riskLevel) {
-        case 'HIGH':
-          riskValue = 100;
-          break;
-        case 'MEDIUM':
-          riskValue = 50;
-          break;
-        default:
-          riskValue = 0;
-      }
+      final riskValue = switch (records[i].riskBand) {
+        RiskBand.severe => 100,
+        RiskBand.high => 75,
+        RiskBand.moderate => 50,
+        RiskBand.low => 0,
+      };
       riskSpots.add(FlSpot(i.toDouble(), riskValue.toDouble()));
     }
 

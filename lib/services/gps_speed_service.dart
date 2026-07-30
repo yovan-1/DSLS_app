@@ -1,8 +1,9 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:flutter/material.dart' hide DayPeriod;
-import '../models/speed_calculator.dart';
+import '../models/speed_model/road_conditions.dart';
+import '../models/speed_model/speed_advisor.dart';
+import '../models/speed_model/speed_recommendation.dart';
 
 class SpeedData {
   final int rawGpsSpeed;
@@ -16,18 +17,21 @@ class SpeedData {
   });
 }
 
+/// Cached evaluation of the current conditions.
+///
+/// This used to carry a `Color`, which put a UI decision inside a service. The
+/// colour now lives in `lib/utils/speed_colors.dart` and is derived at render
+/// time from [recommendation].
 class RiskData {
-  final int recommendedSpeed;
-  final String riskLevel;
-  final List<String> warnings;
-  final Color speedColor;
+  final SpeedRecommendation recommendation;
 
-  RiskData({
-    required this.recommendedSpeed,
-    required this.riskLevel,
-    required this.warnings,
-    required this.speedColor,
-  });
+  const RiskData({required this.recommendation});
+
+  int get recommendedSpeed => recommendation.recommendedSpeedKph;
+  RiskBand get riskBand => recommendation.riskBand;
+  String get riskLevel => recommendation.riskBand.label;
+  List<String> get warnings =>
+      recommendation.advisories.map((a) => a.message).toList();
 }
 
 class SpeedUpdate {
@@ -114,7 +118,7 @@ class GpsSpeedService extends ChangeNotifier {
   final _speedController = StreamController<SpeedUpdate>.broadcast();
   Stream<SpeedUpdate> get speedStream => _speedController.stream;
 
-  SpeedParameters? _lastParams;
+  RoadConditions? _lastConditions;
   RiskData? _cachedRiskData;
   DateTime? _lastRiskCalcTime;
 
@@ -138,8 +142,8 @@ class GpsSpeedService extends ChangeNotifier {
 
   SpeedSensitivityConfig get sensitivity => _sensitivity;
 
-  void setCalculationParams(SpeedParameters params) {
-    _lastParams = params;
+  void setRoadConditions(RoadConditions conditions) {
+    _lastConditions = conditions;
     _cachedRiskData = null;
   }
 
@@ -151,30 +155,8 @@ class GpsSpeedService extends ChangeNotifier {
     notifyListeners();
   }
 
-  static RiskData _computeRisk(SpeedParameters params, int currentSpeed) {
-    final result = SpeedCalculator.calculate(params);
-    final diff = currentSpeed - result.recommendedSpeed;
-
-    Color speedColor;
-    if (currentSpeed == 0) {
-      speedColor = Colors.grey;
-    } else if (diff <= 0) {
-      speedColor = Colors.green;
-    } else if (diff <= 10) {
-      speedColor = Colors.yellow;
-    } else {
-      speedColor = Colors.red;
-    }
-
-    return RiskData(
-      recommendedSpeed: result.recommendedSpeed,
-      riskLevel:
-          result.riskLevel >= 70
-              ? 'HIGH'
-              : (result.riskLevel >= 40 ? 'MEDIUM' : 'LOW'),
-      warnings: result.warnings,
-      speedColor: speedColor,
-    );
+  static RiskData _computeRisk(RoadConditions conditions) {
+    return RiskData(recommendation: SpeedAdvisor.evaluate(conditions));
   }
 
   RiskData? get cachedRiskData => _cachedRiskData;
@@ -341,11 +323,11 @@ class GpsSpeedService extends ChangeNotifier {
     _lastUpdate = position.timestamp;
 
     final now = DateTime.now();
-    if (_lastParams != null) {
+    if (_lastConditions != null) {
       if (_lastRiskCalcTime == null ||
           now.difference(_lastRiskCalcTime!) > _sensitivity.throttleInterval) {
         _lastRiskCalcTime = now;
-        _cachedRiskData = _computeRisk(_lastParams!, _fusedSpeed);
+        _cachedRiskData = _computeRisk(_lastConditions!);
       }
     }
 

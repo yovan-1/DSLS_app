@@ -68,6 +68,26 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Configure release signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo "::error::No ANDROID_KEYSTORE_BASE64 secret is configured."
+            echo "::error::build.gradle.kts would silently fall back to the DEBUG keystore, producing an APK that cannot be published or installed as an update. See DEVELOPER_GUIDE.md section 3.5."
+            exit 1
+          fi
+          echo "$KEYSTORE_BASE64" | base64 -d > android/app/upload-keystore.jks
+          cat > android/key.properties <<EOF
+          storePassword=$STORE_PASSWORD
+          keyPassword=$KEY_PASSWORD
+          keyAlias=$KEY_ALIAS
+          storeFile=upload-keystore.jks
+          EOF
+
       - name: Build release APK
         run: flutter build apk --release --obfuscate --split-debug-info=build/debug-info
 
@@ -79,7 +99,10 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ needs.create-release.outputs.version }}
+          # Must be the v-prefixed tag created by the create-release job.
+          # Passing the bare version targeted a tag that does not exist and
+          # produced a second, empty release instead of attaching the APK.
+          tag_name: v${{ needs.create-release.outputs.version }}
           files: build/app/outputs/flutter-apk/dsls-${{ needs.create-release.outputs.version }}-release.apk
           draft: true
         env:

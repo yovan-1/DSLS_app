@@ -10,7 +10,6 @@ import 'services/gps_speed_service.dart';
 import 'services/auto_parameters_service.dart';
 import 'services/visibility_service.dart';
 import 'services/offline_storage_service.dart';
-import 'services/route_service.dart';
 import 'services/motion_sensor_service.dart';
 import 'services/settings_service.dart';
 import 'services/cloud_upload_service.dart';
@@ -45,9 +44,13 @@ void main() async {
 
     final cloudUploadService = CloudUploadService(settingsService: settingsService);
 
+    final alertService = SpeedAlertService(settingsService: settingsService);
+    await alertService.init();
+
     final tripService = TripService();
     tripService.setStorage(storage);
     tripService.setCloudUploadService(cloudUploadService);
+    tripService.setSettingsService(settingsService);
     await tripService.loadTrips();
 
     runApp(
@@ -56,9 +59,8 @@ void main() async {
           ChangeNotifierProvider.value(value: settingsService),
           ChangeNotifierProvider.value(value: tripService),
           ChangeNotifierProvider.value(value: cloudUploadService),
-          ChangeNotifierProvider(create: (_) => SpeedAlertService(settingsService: settingsService)),
+          ChangeNotifierProvider.value(value: alertService),
           ChangeNotifierProvider(create: (_) => SpeedService()),
-          ChangeNotifierProvider(create: (_) => RouteService()),
           ChangeNotifierProvider(create: (_) => GpsSpeedService()),
           ChangeNotifierProvider(create: (_) => AutoParametersService()),
           ChangeNotifierProvider(create: (_) => VisibilityService()),

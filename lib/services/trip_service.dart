@@ -1,24 +1,32 @@
 import 'dart:async';
 import 'package:flutter/material.dart' hide DayPeriod;
-import '../models/speed_calculator.dart';
 import '../models/trip_data.dart';
+import '../models/speed_model/road_conditions.dart';
+import '../models/speed_model/speed_advisor.dart';
+import '../models/speed_model/speed_recommendation.dart';
 import 'offline_storage_service.dart';
 import 'cloud_upload_service.dart';
+import 'settings_service.dart';
 
 class DrivingRecord {
   final int speed;
   final int recommendedSpeed;
-  final String riskLevel;
+  final RiskBand riskBand;
   final bool isOverSpeed;
   final DateTime timestamp;
 
   DrivingRecord({
     required this.speed,
     required this.recommendedSpeed,
-    required this.riskLevel,
+    required this.riskBand,
     required this.isOverSpeed,
     required this.timestamp,
   });
+
+  /// True when conditions alone put this sample in a dangerous band, before
+  /// considering what the driver did about it.
+  bool get isHighRisk =>
+      riskBand == RiskBand.high || riskBand == RiskBand.severe;
 }
 
 class TripService extends ChangeNotifier {
@@ -27,6 +35,7 @@ class TripService extends ChangeNotifier {
   bool _isTracking = false;
   OfflineStorageService? _storage;
   CloudUploadService? _cloudUploadService;
+  SettingsService? _settingsService;
 
   final List<DrivingRecord> _drivingRecords = [];
   Timer? _recordingTimer;
@@ -43,6 +52,10 @@ class TripService extends ChangeNotifier {
     _cloudUploadService = service;
   }
 
+  void setSettingsService(SettingsService service) {
+    _settingsService = service;
+  }
+
   Future<void> loadTrips() async {
     if (_storage != null) {
       _trips = await _storage!.getTrips();
@@ -57,7 +70,7 @@ class TripService extends ChangeNotifier {
     if (_drivingRecords.isEmpty) return 0;
     int safeCount =
         _drivingRecords
-            .where((r) => r.isOverSpeed == false && r.riskLevel != 'HIGH')
+            .where((r) => r.isOverSpeed == false && !r.isHighRisk)
             .length;
     return ((safeCount / _drivingRecords.length) * 100).round();
   }
@@ -66,8 +79,8 @@ class TripService extends ChangeNotifier {
     if (_drivingRecords.isEmpty) return 0;
     int modCount =
         _drivingRecords.where((r) {
-          if (r.isOverSpeed && r.riskLevel != 'HIGH') return true;
-          if (!r.isOverSpeed && r.riskLevel == 'MEDIUM') return true;
+          if (r.isOverSpeed && !r.isHighRisk) return true;
+          if (!r.isOverSpeed && r.riskBand == RiskBand.moderate) return true;
           return false;
         }).length;
     return ((modCount / _drivingRecords.length) * 100).round();
@@ -79,7 +92,7 @@ class TripService extends ChangeNotifier {
         _drivingRecords
             .where(
               (r) =>
-                  r.riskLevel == 'HIGH' ||
+                  r.isHighRisk ||
                   (r.isOverSpeed && (r.speed - r.recommendedSpeed) > 20),
             )
             .length;
@@ -188,15 +201,15 @@ class TripService extends ChangeNotifier {
     };
   }
 
-  void startTrip(SpeedParameters params) {
+  void startTrip(RoadConditions conditions) {
     _drivingRecords.clear();
-    final result = SpeedCalculator.calculate(params);
+    final recommendation = SpeedAdvisor.evaluate(conditions);
     _currentTrip = TripData(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       startTime: DateTime.now(),
-      location: params.location,
-      baseSpeedLimit: params.baseSpeedLimit,
-      recommendedSpeed: result.recommendedSpeed,
+      location: conditions.roadClass,
+      baseSpeedLimit: conditions.speedLimitKph,
+      recommendedSpeed: recommendation.recommendedSpeedKph,
     );
     _isTracking = true;
     notifyListeners();
@@ -205,15 +218,9 @@ class TripService extends ChangeNotifier {
   void addRecord({
     required int speed,
     required int recommendedSpeed,
-    required String riskLevel,
+    required RiskBand riskBand,
   }) {
-    debugPrint(
-      '[TripService.addRecord] _isTracking=$_isTracking, speed=$speed, rec=$recommendedSpeed, risk=$riskLevel',
-    );
-    if (!_isTracking) {
-      debugPrint('[TripService.addRecord] REJECTED - not tracking');
-      return;
-    }
+    if (!_isTracking) return;
 
     if (_currentTrip == null) return;
 
@@ -222,7 +229,7 @@ class TripService extends ChangeNotifier {
     final record = DrivingRecord(
       speed: speed,
       recommendedSpeed: recommendedSpeed,
-      riskLevel: riskLevel,
+      riskBand: riskBand,
       isOverSpeed: isOverSpeed,
       timestamp: now,
     );
@@ -258,9 +265,6 @@ class TripService extends ChangeNotifier {
       alerts: alerts,
     );
 
-    debugPrint(
-      '[TripService] RECORD ADDED: ${_drivingRecords.length} records stored',
-    );
     notifyListeners();
   }
 
@@ -317,19 +321,13 @@ class TripService extends ChangeNotifier {
       _isTracking = false;
       await _saveTrips();
 
-      if (_cloudUploadService != null) {
-        final settings = await _getSettingsService();
-        if (settings?.autoUploadEnabled == true) {
-          _cloudUploadService!.uploadTrip(completedTrip);
-        }
+      if (_cloudUploadService != null &&
+          _settingsService?.autoUploadEnabled == true) {
+        unawaited(_cloudUploadService!.uploadTrip(completedTrip));
       }
 
       notifyListeners();
     }
-  }
-
-  Future<dynamic> _getSettingsService() async {
-    return null;
   }
 
   Future<void> deleteTrip(String id) async {

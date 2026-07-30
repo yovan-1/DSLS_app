@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../config/app_config.dart';
 
 class FeedbackPage extends StatefulWidget {
   const FeedbackPage({super.key});
@@ -38,7 +39,7 @@ class _FeedbackPageState extends State<FeedbackPage> {
     final body = Uri.encodeComponent(
       'Rating: $_rating/5 (${_getRatingText()})\n\n${_feedbackController.text.trim()}',
     );
-    final mailUri = Uri.parse('mailto:grbsderrick@gmail.com?subject=$subject&body=$body');
+    final mailUri = Uri.parse('mailto:${AppConfig.contactEmail}?subject=$subject&body=$body');
 
     try {
       final launched = await launchUrl(mailUri);

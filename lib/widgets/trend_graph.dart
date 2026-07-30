@@ -1,5 +1,4 @@
 import 'package:flutter/material.dart';
-import '../services/trip_service.dart';
 
 class TrendGraph extends StatelessWidget {
   final List<dynamic> trips;

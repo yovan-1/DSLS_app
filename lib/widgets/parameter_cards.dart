@@ -1,10 +1,12 @@
 import 'package:flutter/material.dart';
 import '../models/speed_calculator.dart';
+import '../models/speed_model/road_conditions.dart';
+import '../models/speed_model/solar_position.dart';
 
 class ParameterCards extends StatelessWidget {
-  final SpeedParameters params;
+  final RoadConditions conditions;
 
-  const ParameterCards({super.key, required this.params});
+  const ParameterCards({super.key, required this.conditions});
 
   @override
   Widget build(BuildContext context) {
@@ -15,7 +17,7 @@ class ParameterCards extends StatelessWidget {
             child: Column(
               children: [
                 Icon(
-                  SpeedCalculator.getWeatherIcon(params.weather),
+                  SpeedCalculator.getWeatherIcon(conditions.weather),
                   color: Color(0xFF00E676),
                 ),
                 Text(
@@ -23,7 +25,7 @@ class ParameterCards extends StatelessWidget {
                   style: TextStyle(fontSize: 12, color: Colors.white54),
                 ),
                 Text(
-                  SpeedCalculator.getWeatherLabel(params.weather),
+                  SpeedCalculator.getWeatherLabel(conditions.weather),
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
@@ -40,7 +42,7 @@ class ParameterCards extends StatelessWidget {
             child: Column(
               children: [
                 Icon(
-                  SpeedCalculator.getLocationIcon(params.location),
+                  SpeedCalculator.getLocationIcon(conditions.roadClass),
                   color: Color(0xFF00E676),
                 ),
                 Text(
@@ -48,7 +50,7 @@ class ParameterCards extends StatelessWidget {
                   style: TextStyle(fontSize: 12, color: Colors.white54),
                 ),
                 Text(
-                  SpeedCalculator.getLocationLabel(params.location),
+                  SpeedCalculator.getLocationLabel(conditions.roadClass),
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 12,
@@ -64,13 +66,13 @@ class ParameterCards extends StatelessWidget {
           child: _buildCard(
             child: Column(
               children: [
-                Icon(Icons.visibility, color: Color(0xFF00E676)),
+                Icon(Icons.light_mode, color: Color(0xFF00E676)),
                 Text(
-                  "Visibility",
+                  "Light",
                   style: TextStyle(fontSize: 12, color: Colors.white54),
                 ),
                 Text(
-                  SpeedCalculator.getVisibilityLabel(params.visibility),
+                  SolarPosition.label(conditions.daylight),
                   style: TextStyle(
                     fontWeight: FontWeight.bold,
                     fontSize: 12,

@@ -50,7 +50,7 @@ class HowItWorksPage extends StatelessWidget {
               icon: Icons.analytics,
               title: "Risk Analysis",
               description:
-                  "Analyzes road conditions, traffic patterns, and driving behavior to calculate optimal safe speeds.",
+                  "Combines weather, visibility, time of day and the road type at your location to calculate a safe speed.",
             ),
             const SizedBox(height: 16),
 

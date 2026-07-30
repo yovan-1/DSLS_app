@@ -1,7 +1,13 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:dsls_app/services/alert_service.dart';
+import 'package:dsls_app/services/settings_service.dart';
 
 void main() {
+  // SpeedAlertService's constructor builds a FlutterTts, which registers a
+  // MethodChannel handler and needs a binding. Without this the whole group
+  // throws before any assertion runs.
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   group('SpeedAlertService', () {
     late SpeedAlertService service;
 
@@ -26,12 +32,26 @@ void main() {
         expect(service.enableNotifications, true);
       });
 
-      test('should have default warning ahead speed of 5', () {
-        expect(service.warningAheadSpeed, 5);
+      test('should have default warning ahead speed of 10', () {
+        expect(service.warningAheadSpeed, 10);
       });
 
-      test('should have default critical ahead speed of 15', () {
-        expect(service.criticalAheadSpeed, 15);
+      test('should have default critical ahead speed of 20', () {
+        expect(service.criticalAheadSpeed, 20);
+      });
+
+      test('should match AlertSettings defaults', () {
+        // A mismatch here means a fresh install visibly jumps thresholds once
+        // the async _loadSettings() lands.
+        const defaults = AlertSettings();
+        expect(service.alertThreshold, defaults.alertThreshold);
+        expect(service.enableSound, defaults.enableSound);
+        expect(service.enableVibration, defaults.enableVibration);
+        expect(service.enableVoice, defaults.enableVoice);
+        expect(service.enableNotifications, defaults.enableNotifications);
+        expect(service.enableZoneAlerts, defaults.enableZoneAlerts);
+        expect(service.warningAheadSpeed, defaults.warningAheadSpeed);
+        expect(service.criticalAheadSpeed, defaults.criticalAheadSpeed);
       });
     });
 
@@ -147,12 +167,20 @@ void main() {
 
       test('should return warning message with speed diff', () {
         final message = service.getAlertMessage(60, 50);
-        expect(message, 'Warning: You are 10 km/h over the recommended speed');
+        // Spelled out because these strings are fed to TTS.
+        expect(
+          message,
+          'Warning: You are 10 kilometers per hour over the recommended speed',
+        );
       });
 
       test('should return critical message with speed diff', () {
         final message = service.getAlertMessage(70, 50);
-        expect(message, 'CRITICAL: You are exceeding the recommended speed by 20 km/h!');
+        expect(
+          message,
+          'CRITICAL: You are exceeding the recommended speed by '
+              '20 kilometers per hour!',
+        );
       });
     });
   });
@@ -175,70 +203,74 @@ void main() {
   });
 
   group('AlertSettings', () {
-    test('should create with required parameters', () {
-      const settings = AlertSettings(
-        threshold: 10,
-        sound: true,
-        vibration: true,
-        notifications: true,
-        warningAhead: 5,
-        criticalAhead: 15,
-      );
+    const custom = AlertSettings(
+      alertThreshold: 12,
+      enableSound: false,
+      enableVibration: false,
+      enableVoice: false,
+      enableNotifications: false,
+      enableZoneAlerts: false,
+      warningAheadSpeed: 7,
+      criticalAheadSpeed: 22,
+    );
 
-      expect(settings.threshold, 10);
-      expect(settings.sound, true);
-      expect(settings.vibration, true);
-      expect(settings.notifications, true);
-      expect(settings.warningAhead, 5);
-      expect(settings.criticalAhead, 15);
+    test('should create with explicit values', () {
+      expect(custom.alertThreshold, 12);
+      expect(custom.enableSound, false);
+      expect(custom.enableVibration, false);
+      expect(custom.enableVoice, false);
+      expect(custom.enableNotifications, false);
+      expect(custom.enableZoneAlerts, false);
+      expect(custom.warningAheadSpeed, 7);
+      expect(custom.criticalAheadSpeed, 22);
     });
 
-    test('toJson should serialize', () {
-      const settings = AlertSettings(
-        threshold: 10,
-        sound: true,
-        vibration: true,
-        notifications: true,
-        warningAhead: 5,
-        criticalAhead: 15,
-      );
+    test('toJson should serialize every field', () {
+      final json = custom.toJson();
 
-      final json = settings.toJson();
-
-      expect(json['threshold'], 10);
-      expect(json['sound'], true);
-      expect(json['warningAhead'], 5);
-      expect(json['criticalAhead'], 15);
+      expect(json['alertThreshold'], 12);
+      expect(json['enableSound'], false);
+      expect(json['enableVibration'], false);
+      expect(json['enableVoice'], false);
+      expect(json['enableNotifications'], false);
+      expect(json['enableZoneAlerts'], false);
+      expect(json['warningAheadSpeed'], 7);
+      expect(json['criticalAheadSpeed'], 22);
     });
 
-    test('fromJson should deserialize', () {
-      final json = {
-        'threshold': 10,
-        'sound': true,
-        'vibration': true,
-        'notifications': true,
-        'warningAhead': 5,
-        'criticalAhead': 15,
-      };
+    test('should survive a JSON round trip', () {
+      final restored = AlertSettings.fromJson(custom.toJson());
 
-      final settings = AlertSettings.fromJson(json);
-
-      expect(settings.threshold, 10);
-      expect(settings.sound, true);
-      expect(settings.warningAhead, 5);
+      expect(restored.alertThreshold, custom.alertThreshold);
+      expect(restored.enableSound, custom.enableSound);
+      expect(restored.enableVibration, custom.enableVibration);
+      expect(restored.enableVoice, custom.enableVoice);
+      expect(restored.enableNotifications, custom.enableNotifications);
+      expect(restored.enableZoneAlerts, custom.enableZoneAlerts);
+      expect(restored.warningAheadSpeed, custom.warningAheadSpeed);
+      expect(restored.criticalAheadSpeed, custom.criticalAheadSpeed);
     });
 
     test('fromJson should use defaults for missing values', () {
-      final json = <String, dynamic>{};
+      final settings = AlertSettings.fromJson(<String, dynamic>{});
 
-      final settings = AlertSettings.fromJson(json);
+      expect(settings.alertThreshold, 10);
+      expect(settings.enableSound, true);
+      expect(settings.enableVibration, true);
+      expect(settings.enableVoice, true);
+      expect(settings.enableNotifications, true);
+      expect(settings.enableZoneAlerts, true);
+      expect(settings.warningAheadSpeed, 10);
+      expect(settings.criticalAheadSpeed, 20);
+    });
 
-      expect(settings.threshold, 10);
-      expect(settings.sound, true);
-      expect(settings.vibration, true);
-      expect(settings.notifications, true);
-      expect(settings.warningAhead, 5);
-      expect(settings.criticalAhead, 15);
+    test('copyWith should change only the named field', () {
+      final updated = custom.copyWith(enableVoice: true);
+
+      expect(updated.enableVoice, true);
+      expect(updated.enableSound, custom.enableSound);
+      expect(updated.alertThreshold, custom.alertThreshold);
+      expect(updated.criticalAheadSpeed, custom.criticalAheadSpeed);
     });
   });
 }

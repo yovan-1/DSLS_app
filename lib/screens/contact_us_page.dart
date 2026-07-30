@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../config/app_config.dart';
 
 class ContactUsPage extends StatefulWidget {
   const ContactUsPage({super.key});
@@ -34,7 +35,7 @@ class _ContactUsPageState extends State<ContactUsPage> {
       'Email: ${_emailController.text.trim()}\n\n'
       '${_messageController.text.trim()}',
     );
-    final mailUri = Uri.parse('mailto:grbsderrick@gmail.com?subject=$subject&body=$body');
+    final mailUri = Uri.parse('mailto:${AppConfig.contactEmail}?subject=$subject&body=$body');
 
     try {
       final launched = await launchUrl(mailUri);

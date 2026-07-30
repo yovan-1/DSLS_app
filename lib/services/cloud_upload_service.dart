@@ -1,5 +1,4 @@
 import 'dart:convert';
-import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
@@ -13,7 +12,7 @@ class CloudUploadService extends ChangeNotifier {
   bool _isUploading = false;
   bool _testInProgress = false;
   String? _lastError;
-  List<String> _uploadHistory = [];
+  final List<String> _uploadHistory = [];
   final List<TripData> _pendingUploads = [];
 
   CloudUploadService({required SettingsService settingsService})
@@ -249,7 +248,7 @@ class CloudUploadService extends ChangeNotifier {
     final amzDate = _formatAmzDate(now);
     final dateStamp = _formatDateStamp(now);
     final payloadHash = sha256.convert(payload).toString();
-    final canonicalUri = '/$key';
+    final canonicalUri = _uriEncodePath('/$key');
     final canonicalHeaders =
         'host:$host\nx-amz-content-sha256:$payloadHash\nx-amz-date:$amzDate\n';
     const signedHeaders = 'host;x-amz-content-sha256;x-amz-date';
@@ -283,13 +282,35 @@ class CloudUploadService extends ChangeNotifier {
       if (contentType != null) 'Content-Type': contentType,
     };
 
-    final url = Uri.parse('https://$host/$key');
+    // Must be byte-identical to canonicalUri, or the signature won't match.
+    final url = Uri.parse('https://$host$canonicalUri');
     if (method == 'PUT') {
       return http
           .put(url, headers: headers, body: payload)
           .timeout(const Duration(seconds: 30));
     }
     return http.delete(url, headers: headers).timeout(const Duration(seconds: 30));
+  }
+
+  /// Percent-encodes an S3 object path for SigV4.
+  ///
+  /// AWS requires every byte outside the RFC 3986 unreserved set
+  /// (`A-Z a-z 0-9 - _ . ~`) to be encoded with *uppercase* hex, while `/` is
+  /// preserved as the path separator. Dart's [Uri.encodeComponent] leaves
+  /// `!~*'()` unencoded and so cannot be used here.
+  static String _uriEncodePath(String path) {
+    const unreserved =
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_.~';
+    final buffer = StringBuffer();
+    for (final byte in utf8.encode(path)) {
+      final char = String.fromCharCode(byte);
+      if (byte < 128 && (unreserved.contains(char) || char == '/')) {
+        buffer.write(char);
+      } else {
+        buffer.write('%${byte.toRadixString(16).toUpperCase().padLeft(2, '0')}');
+      }
+    }
+    return buffer.toString();
   }
 }
 

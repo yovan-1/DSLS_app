@@ -117,6 +117,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
 
   Future<void> _uploadAllTrips() async {
     final tripService = context.read<TripService>();
+    final cloudService = context.read<CloudUploadService>();
     final trips = tripService.trips;
 
     if (trips.isEmpty) {
@@ -149,7 +150,6 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     setState(() => _isUploading = true);
 
     try {
-      final cloudService = context.read<CloudUploadService>();
       int uploaded = 0;
 
       for (final trip in trips) {

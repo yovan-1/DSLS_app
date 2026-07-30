@@ -12,7 +12,6 @@ import '../widgets/stats_row.dart';
 import '../widgets/trend_graph.dart';
 import '../widgets/behavior_summary.dart';
 import '../widgets/driving_graph.dart';
-import 'trip_details_screen.dart';
 
 class HistoryScreen extends StatefulWidget {
   final Function(int)? onBack;

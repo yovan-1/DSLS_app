@@ -12,8 +12,10 @@ class SpeedAlertService extends ChangeNotifier {
   bool _enableVoice = true;
   bool _enableNotifications = true;
   bool _enableZoneAlerts = true;
-  int _warningAheadSpeed = 5;
-  int _criticalAheadSpeed = 15;
+  // Must match AlertSettings' defaults, otherwise a fresh install visibly jumps
+  // thresholds once the async _loadSettings() lands.
+  int _warningAheadSpeed = 10;
+  int _criticalAheadSpeed = 20;
 
   AlertLevel _lastAlertLevel = AlertLevel.safe;
   DateTime? _lastAlertTime;
@@ -32,13 +34,20 @@ class SpeedAlertService extends ChangeNotifier {
   static const _zoneApproachingCooldown = Duration(seconds: 60);
   static const _zoneEnteringCooldown = Duration(seconds: 30);
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  final FlutterTts _tts = FlutterTts();
+  // Lazy: constructing these touches platform channels, which throws outside a
+  // running app (and asynchronously, so the error lands on unrelated code).
+  // Nothing platform-dependent may happen in the constructor.
+  late final AudioPlayer _audioPlayer = AudioPlayer();
+  late final FlutterTts _tts = FlutterTts();
 
   SpeedAlertService({SettingsService? settingsService}) {
     _settingsService = settingsService;
-    _initTts();
-    _loadSettings();
+  }
+
+  /// Warms up TTS and restores persisted settings. Call once at startup, before
+  /// the first alert can fire. Safe to call more than once.
+  Future<void> init() async {
+    await Future.wait([_initTts(), _loadSettings()]);
   }
 
   int get alertThreshold => _alertThreshold;
@@ -55,8 +64,11 @@ class SpeedAlertService extends ChangeNotifier {
   Future<void> _loadSettings() async {
     if (_settingsService == null) return;
     final settings = await _settingsService!.loadAlertSettings();
+    _alertThreshold = settings.alertThreshold;
     _enableSound = settings.enableSound;
     _enableVibration = settings.enableVibration;
+    _enableVoice = settings.enableVoice;
+    _enableNotifications = settings.enableNotifications;
     _enableZoneAlerts = settings.enableZoneAlerts;
     _warningAheadSpeed = settings.warningAheadSpeed;
     _criticalAheadSpeed = settings.criticalAheadSpeed;
@@ -66,8 +78,11 @@ class SpeedAlertService extends ChangeNotifier {
   Future<void> _saveSettings() async {
     if (_settingsService == null) return;
     final settings = AlertSettings(
+      alertThreshold: _alertThreshold,
       enableSound: _enableSound,
       enableVibration: _enableVibration,
+      enableVoice: _enableVoice,
+      enableNotifications: _enableNotifications,
       enableZoneAlerts: _enableZoneAlerts,
       warningAheadSpeed: _warningAheadSpeed,
       criticalAheadSpeed: _criticalAheadSpeed,

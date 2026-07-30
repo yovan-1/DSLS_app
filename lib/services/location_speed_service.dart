@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import '../models/speed_zone.dart';
 import '../models/road_segment.dart' show RoadSegment, LocationUtils;
 import '../models/speed_calculator.dart';
+import '../models/speed_model/road_conditions.dart' show LimitSource;
 
 enum LocationSpeedStatus {
   none,
@@ -17,20 +18,30 @@ class LocationSpeedResult {
   final String activeRoadName;
   final LocationSpeedStatus status;
 
+  /// Whether [speedLimit] is a real limit for this place or a fallback guess.
+  ///
+  /// The speed model applies an uncertainty margin only to inferred limits;
+  /// curated ones already account for their surroundings.
+  final LimitSource limitSource;
+
   const LocationSpeedResult({
     required this.locationType,
     required this.speedLimit,
     required this.activeZoneName,
     required this.activeRoadName,
     required this.status,
+    this.limitSource = LimitSource.curated,
   });
 
+  /// Used when the driver is outside every mapped zone and road. The 60 km/h is
+  /// a guess, and [limitSource] says so.
   static const LocationSpeedResult defaultResult = LocationSpeedResult(
     locationType: LocationType.urban,
     speedLimit: 60,
     activeZoneName: '',
     activeRoadName: '',
     status: LocationSpeedStatus.none,
+    limitSource: LimitSource.inferred,
   );
 }
 

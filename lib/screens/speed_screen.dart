@@ -18,6 +18,9 @@ import '../widgets/parameter_cards.dart';
 import '../widgets/over_speed_flash.dart';
 import '../widgets/gps_status_banner.dart';
 import '../widgets/condition_status_card.dart';
+import '../models/speed_model/speed_advisor.dart';
+import '../models/speed_model/speed_recommendation.dart';
+import '../utils/speed_colors.dart';
 
 class SpeedScreen extends StatefulWidget {
   const SpeedScreen({super.key});
@@ -42,7 +45,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
       final speedService = context.read<SpeedService>();
 
       autoParams.updateTimeOfDay();
-      gpsService.setCalculationParams(_effectiveParams(autoParams, speedService));
+      gpsService.setRoadConditions(speedService.conditions);
     });
   }
 
@@ -56,12 +59,12 @@ class _SpeedScreenState extends State<SpeedScreen> {
     VisibilityService visibilityService,
     MotionSensorService motionService,
   ) {
-    tripService.startTrip(_effectiveParams(autoParams, speedService));
+    tripService.startTrip(speedService.conditions);
     visibilityService.initialize().then((_) {
       if (!mounted || !visibilityService.isInitialized) return;
       autoParams.updateVisibility(visibilityService.visibilityLevel);
       speedService.updateVisibility(visibilityService.visibilityLevel);
-      gpsService.setCalculationParams(_effectiveParams(autoParams, speedService));
+      gpsService.setRoadConditions(speedService.conditions);
     });
     motionService.initialize().then((_) {
       if (!mounted || !motionService.isInitialized) return;
@@ -80,7 +83,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
       final risk = gpsService.cachedRiskData;
       final speed = gpsService.fusedSpeed > 0 ? gpsService.fusedSpeed : gpsService.smoothedSpeed;
       final recSpeed = risk?.recommendedSpeed ?? recommendedSpeed;
-      final riskLevel = risk?.riskLevel ?? 'LOW';
+      final riskBand = risk?.riskBand ?? RiskBand.low;
 
       if (motionService.isInitialized) {
         gpsService.updateFromAccelerometer(motionService.speedEstimateMps);
@@ -97,58 +100,42 @@ class _SpeedScreenState extends State<SpeedScreen> {
           lastPos.latitude,
           lastPos.longitude,
         );
-        gpsService.setCalculationParams(_effectiveParams(autoParams, speedService));
+        gpsService.setRoadConditions(speedService.conditions);
       }
 
       if (speed > recSpeed) {
         alertService.triggerAlert(speed, recSpeed);
-      } else {
-        final locationResult = speedService.locationResult;
-        if (locationResult.status == LocationSpeedStatus.approachingZone) {
-          alertService.triggerZoneAlert(
-            zoneType: locationResult.locationType,
-            zoneName: locationResult.activeZoneName,
-            speedLimit: locationResult.speedLimit,
-            isApproaching: true,
-          );
-        } else if (locationResult.status == LocationSpeedStatus.inZone) {
-          alertService.triggerZoneAlert(
-            zoneType: locationResult.locationType,
-            zoneName: locationResult.activeZoneName,
-            speedLimit: locationResult.speedLimit,
-            isApproaching: false,
-          );
-        }
+      }
+
+      // Zone alerts fire independently of over-speed alerts. They used to sit
+      // in an `else`, which suppressed them exactly when they matter most —
+      // approaching a school zone too fast.
+      final locationResult = speedService.locationResult;
+      if (locationResult.status == LocationSpeedStatus.approachingZone) {
+        alertService.triggerZoneAlert(
+          zoneType: locationResult.locationType,
+          zoneName: locationResult.activeZoneName,
+          speedLimit: locationResult.speedLimit,
+          isApproaching: true,
+        );
+      } else if (locationResult.status == LocationSpeedStatus.inZone) {
+        alertService.triggerZoneAlert(
+          zoneType: locationResult.locationType,
+          zoneName: locationResult.activeZoneName,
+          speedLimit: locationResult.speedLimit,
+          isApproaching: false,
+        );
       }
 
       tripService.addRecord(
         speed: speed,
         recommendedSpeed: recSpeed,
-        riskLevel: riskLevel,
+        riskBand: riskBand,
       );
     });
     debugPrint('[SpeedScreen] Recording started');
   }
 
-  SpeedParameters _effectiveParams(
-    AutoParametersService autoParams,
-    SpeedService speedService,
-  ) {
-    final base = autoParams.currentParams;
-    final locationResult = speedService.locationResult;
-
-    if (locationResult.status != LocationSpeedStatus.none) {
-      return SpeedParameters(
-        weather: base.weather,
-        timeOfDay: base.timeOfDay,
-        location: locationResult.locationType,
-        visibility: base.visibility,
-        baseSpeedLimit: locationResult.speedLimit,
-      );
-    }
-
-    return base;
-  }
 
   Future<void> _refreshWeatherIfNeeded(
     AutoParametersService autoParams,
@@ -208,14 +195,6 @@ class _SpeedScreenState extends State<SpeedScreen> {
     super.dispose();
   }
 
-  Color _getSpeedColor(int currentSpeed, int recommendedSpeed) {
-    if (currentSpeed == 0) return Colors.grey;
-    final diff = currentSpeed - recommendedSpeed;
-    if (diff <= 0) return Colors.green;
-    if (diff <= 10) return Colors.yellow;
-    return Colors.red;
-  }
-
   @override
   Widget build(BuildContext context) {
     final gpsService = context.watch<GpsSpeedService>();
@@ -239,21 +218,22 @@ class _SpeedScreenState extends State<SpeedScreen> {
     final errorMessage = gpsService.errorMessage;
     final gpsStatus = gpsService.gpsStatus;
 
-    final params = _effectiveParams(autoParams, speedService);
+    final conditions = speedService.conditions;
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      gpsService.setCalculationParams(params);
+      gpsService.setRoadConditions(conditions);
     });
 
-    final cachedRisk = gpsService.cachedRiskData;
-    final recommendedSpeed =
-        cachedRisk?.recommendedSpeed ??
-        SpeedCalculator.calculate(params).recommendedSpeed;
-    final speedColor =
-        cachedRisk?.speedColor ??
-        _getSpeedColor(currentSpeed, recommendedSpeed);
+    final recommendation =
+        gpsService.cachedRiskData?.recommendation ??
+        SpeedAdvisor.evaluate(conditions);
+    final recommendedSpeed = recommendation.recommendedSpeedKph;
+    final speedColor = SpeedColors.forSpeed(
+      currentSpeed: currentSpeed,
+      recommendedSpeed: recommendedSpeed,
+    );
     final warnings =
-        cachedRisk?.warnings ?? SpeedCalculator.calculate(params).warnings;
+        recommendation.advisories.map((a) => a.message).toList();
     final isOverSpeeding = isMonitoring && currentSpeed > recommendedSpeed;
     final overSpeedDiff = currentSpeed - recommendedSpeed;
 
@@ -291,6 +271,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
                 ZoneAlertWidget(
                   locationResult: speedService.locationResult,
                 ),
+                _buildUnmappedRoadNotice(speedService, isMonitoring),
                 SizedBox(height: 20),
                 _buildOverSpeedAlert(currentSpeed, recommendedSpeed),
                 _buildWarnings(warnings),
@@ -304,12 +285,12 @@ class _SpeedScreenState extends State<SpeedScreen> {
                   visibilityService,
                 ),
                 SizedBox(height: 20),
-                ParameterCards(params: params),
+                ParameterCards(conditions: conditions),
                 SizedBox(height: 10),
                 ConditionStatusCard(
                   weatherStatus: _weatherStatus,
                   visibilityService: visibilityService,
-                  baseSpeedLimit: params.baseSpeedLimit,
+                  baseSpeedLimit: conditions.speedLimitKph,
                   gpsService: gpsService,
                 ),
               ],
@@ -319,6 +300,40 @@ class _SpeedScreenState extends State<SpeedScreen> {
             Positioned.fill(
               child: OverSpeedFlash(diff: overSpeedDiff),
             ),
+        ],
+      ),
+    );
+  }
+
+  /// Outside the mapped zones and roads the app has no idea what the real limit
+  /// is and falls back to a flat 60 km/h. Say so, rather than presenting the
+  /// guess with the same confidence as a matched zone.
+  Widget _buildUnmappedRoadNotice(SpeedService speedService, bool isMonitoring) {
+    if (!isMonitoring) return SizedBox.shrink();
+    if (speedService.locationResult.status != LocationSpeedStatus.none) {
+      return SizedBox.shrink();
+    }
+
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(12),
+      margin: EdgeInsets.only(top: 12),
+      decoration: BoxDecoration(
+        color: Colors.amber.shade50,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: Colors.amber.shade400),
+      ),
+      child: Row(
+        children: [
+          Icon(Icons.help_outline, color: Colors.amber.shade800, size: 20),
+          SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              "No mapped speed limit here — showing a conservative default. "
+              "Follow the posted signs.",
+              style: TextStyle(color: Colors.amber.shade900, fontSize: 13),
+            ),
+          ),
         ],
       ),
     );
@@ -401,7 +416,7 @@ class _SpeedScreenState extends State<SpeedScreen> {
           _stopRecording(tripService, visibilityService);
         } else {
           await gpsService.startTracking();
-          if (!context.mounted) return;
+          if (!mounted) return;
           if (!gpsService.isTracking) {
             if (gpsService.errorMessage != null) {
               ScaffoldMessenger.of(context).showSnackBar(
