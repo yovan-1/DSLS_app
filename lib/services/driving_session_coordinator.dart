@@ -227,8 +227,13 @@ class DrivingSessionCoordinator extends ChangeNotifier {
 
     _lastFixAt = update.timestamp;
 
+    // Correct the integrator against this fix, so dead-reckoning drift is
+    // bounded by the GPS interval rather than by the length of the trip. This
+    // is also what teaches the estimator which way the phone is pointing
+    // relative to the vehicle. The estimate is read back on the heartbeat, not
+    // here — right after a correction it is by definition just the GPS speed.
     if (_motion.isInitialized) {
-      _gps.updateFromAccelerometer(_motion.speedEstimateMps);
+      _motion.zeroAgainstGps(update.smoothedSpeed / 3.6);
     }
 
     // Zone matching and the solar daylight state both hang off position, so
@@ -304,6 +309,14 @@ class DrivingSessionCoordinator extends ChangeNotifier {
       unawaited(stop());
       return;
     }
+
+    // Feed the dead-reckoned estimate in between fixes, which is the only time
+    // it says anything the GPS has not already said. Only once the estimator
+    // knows the phone's orientation — before that it has nothing to add.
+    if (_motion.isInitialized && _motion.orientationKnown) {
+      _gps.updateFromAccelerometer(_motion.speedEstimateMps);
+    }
+
     _safeNotify();
   }
 

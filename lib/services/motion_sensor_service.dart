@@ -1,75 +1,90 @@
 import 'dart:async';
-import 'dart:math' as math;
+
 import 'package:flutter/foundation.dart';
 import 'package:sensors_plus/sensors_plus.dart';
 
+import '../models/motion/dead_reckoning.dart';
+
+/// One reading of vehicle motion, for consumers that want every sample rather
+/// than the throttled [ChangeNotifier] view.
+@immutable
+class MotionSample {
+  final DateTime timestamp;
+  final double speedEstimateMps;
+  final double forwardAccelMps2;
+  final double headingRateRadPerSec;
+  final bool orientationKnown;
+
+  const MotionSample({
+    required this.timestamp,
+    required this.speedEstimateMps,
+    required this.forwardAccelMps2,
+    required this.headingRateRadPerSec,
+    required this.orientationKnown,
+  });
+}
+
+/// Platform adapter over the accelerometer and gyroscope.
+///
+/// All the physics lives in [DeadReckoningEstimator] so it can be tested
+/// without a device; this class only handles subscriptions, rate limiting and
+/// availability.
 class MotionSensorService extends ChangeNotifier {
   StreamSubscription<AccelerometerEvent>? _accelSubscription;
+  StreamSubscription<UserAccelerometerEvent>? _userAccelSubscription;
   StreamSubscription<GyroscopeEvent>? _gyroSubscription;
 
-  double _accelX = 0;
-  double _accelY = 0;
-  double _accelZ = 0;
+  final DeadReckoningEstimator _estimator = DeadReckoningEstimator();
+  final _sampleController = StreamController<MotionSample>.broadcast();
 
-  double _gyroX = 0;
-  double _gyroY = 0;
-  double _gyroZ = 0;
+  double _headingRate = 0;
+  DateTime? _lastUserAccelAt;
+  DateTime? _lastNotifyAt;
 
-  double _linearAccelX = 0;
-  double _linearAccelY = 0;
-  double _linearAccelZ = 0;
-
-  double _speedEstimateMps = 0;
-
-  DateTime? _lastUpdate;
   bool _isAvailable = false;
   bool _isInitialized = false;
   String? _errorMessage;
 
-  static const double _gravityMagnitude = 9.81;
-  static const double _lowPassAlpha = 0.1;
   static const int _sampleRateHz = 50;
+
+  /// Listeners are UI. Sensors arrive at 50 Hz; nothing on screen changes
+  /// usefully faster than this, and the previous code notified on every single
+  /// event.
+  static const Duration _notifyInterval = Duration(milliseconds: 250);
 
   bool get isAvailable => _isAvailable;
   bool get isInitialized => _isInitialized;
   String? get errorMessage => _errorMessage;
-  double get speedEstimateMps => _speedEstimateMps;
 
-  double get accelX => _accelX;
-  double get accelY => _accelY;
-  double get accelZ => _accelZ;
+  double get speedEstimateMps => _estimator.speedEstimateMps;
+  double get forwardAccelMps2 => _estimator.lastForwardAccelMps2;
+  double get headingRateRadPerSec => _headingRate;
 
-  double get gyroX => _gyroX;
-  double get gyroY => _gyroY;
-  double get gyroZ => _gyroZ;
+  /// False until the device→vehicle orientation has been learned from GPS. The
+  /// speed estimate is only dead-reckoned once this is true; before that it is
+  /// simply the last GPS speed.
+  bool get orientationKnown => _estimator.orientationKnown;
 
-  double get linearAccelX => _linearAccelX;
-  double get linearAccelY => _linearAccelY;
-  double get linearAccelZ => _linearAccelZ;
+  /// Seconds of integration since the last GPS correction — how stale the
+  /// dead-reckoned estimate is.
+  double get secondsSinceGpsFix => _estimator.secondsSinceGpsFix;
 
-  double get headingRate => _gyroZ;
+  Stream<MotionSample> get samples => _sampleController.stream;
 
   Future<void> initialize() async {
     if (_isInitialized) return;
 
     try {
-      await _testSensors();
+      await _probeSensors();
 
       if (!_isAvailable) {
         _errorMessage = 'Motion sensors not available on this device';
-        if (kDebugMode) {
-          debugPrint('[MotionSensor] Sensors not available');
-        }
         notifyListeners();
         return;
       }
 
       _startListening();
       _isInitialized = true;
-
-      if (kDebugMode) {
-        debugPrint('[MotionSensor] Initialized successfully');
-      }
       notifyListeners();
     } catch (e) {
       _errorMessage = 'Failed to initialize motion sensors: $e';
@@ -80,179 +95,124 @@ class MotionSensorService extends ChangeNotifier {
     }
   }
 
-  Future<void> _testSensors() async {
-    try {
-      final accelStream = accelerometerEventStream();
-      final completer = Completer<bool>();
-
-      StreamSubscription<AccelerometerEvent>? testSub;
-      testSub = accelStream.listen(
-        (event) {
-          if (!completer.isCompleted) {
-            completer.complete(true);
-          }
-        },
-        onError: (error) {
-          if (!completer.isCompleted) {
-            completer.complete(false);
-          }
-        },
-      );
-
-      final result = await completer.future.timeout(
-        const Duration(seconds: 2),
-        onTimeout: () => false,
-      );
-
-      await testSub.cancel();
-      _isAvailable = result;
-    } catch (e) {
-      _isAvailable = false;
-    }
-  }
-
-  void _startListening() {
-    _accelSubscription = accelerometerEventStream(
-      samplingPeriod: Duration(milliseconds: 1000 ~/ _sampleRateHz),
-    ).listen(
-      _onAccelerometerEvent,
-      onError: (error) {
-        _errorMessage = 'Accelerometer error: $error';
-        if (kDebugMode) {
-          debugPrint('[MotionSensor] Accelerometer error: $error');
-        }
-      },
-    );
-
-    _gyroSubscription = gyroscopeEventStream(
-      samplingPeriod: Duration(milliseconds: 1000 ~/ _sampleRateHz),
-    ).listen(
-      _onGyroscopeEvent,
-      onError: (error) {
-        if (kDebugMode) {
-          debugPrint('[MotionSensor] Gyroscope error: $error');
-        }
-      },
-    );
-  }
-
-  void _onAccelerometerEvent(AccelerometerEvent event) {
-    final now = DateTime.now();
-
-    _accelX = _lowPassFilter(_accelX, event.x, _lowPassAlpha);
-    _accelY = _lowPassFilter(_accelY, event.y, _lowPassAlpha);
-    _accelZ = _lowPassFilter(_accelZ, event.z, _lowPassAlpha);
-
-    _computeLinearAcceleration(now);
-
-    _updateSpeedEstimate(now);
-
-    notifyListeners();
-  }
-
-  void _onGyroscopeEvent(GyroscopeEvent event) {
-    _gyroX = _lowPassFilter(_gyroX, event.x, _lowPassAlpha);
-    _gyroY = _lowPassFilter(_gyroY, event.y, _lowPassAlpha);
-    _gyroZ = _lowPassFilter(_gyroZ, event.z, _lowPassAlpha);
-  }
-
-  void _computeLinearAcceleration(DateTime now) {
-    final totalAccel = math.sqrt(_accelX * _accelX + _accelY * _accelY + _accelZ * _accelZ);
-
-    double gravityX = 0, gravityY = 0, gravityZ = 0;
-    if (totalAccel > 0) {
-      gravityX = (_accelX / totalAccel) * _gravityMagnitude;
-      gravityY = (_accelY / totalAccel) * _gravityMagnitude;
-      gravityZ = (_accelZ / totalAccel) * _gravityMagnitude;
-    }
-
-    _linearAccelX = _accelX - gravityX;
-    _linearAccelY = _accelY - gravityY;
-    _linearAccelZ = _accelZ - gravityZ;
-  }
-
-  void _updateSpeedEstimate(DateTime now) {
-    if (_lastUpdate == null) {
-      _lastUpdate = now;
-      return;
-    }
-
-    final dt = now.difference(_lastUpdate!).inMicroseconds / 1000000.0;
-    if (dt <= 0 || dt > 1.0) {
-      _lastUpdate = now;
-      return;
-    }
-
-    final accelMagnitude = math.sqrt(
-      _linearAccelX * _linearAccelX +
-      _linearAccelY * _linearAccelY +
-      _linearAccelZ * _linearAccelZ,
-    );
-
-    final bool isStationary = _detectStationary(accelMagnitude);
-
-    if (isStationary) {
-      _speedEstimateMps = 0;
-      _lastUpdate = now;
-      return;
-    }
-
-    final forwardAccel = -_linearAccelY;
-
-    _speedEstimateMps += forwardAccel * dt;
-
-    _speedEstimateMps = _speedEstimateMps.clamp(0.0, 50.0);
-
-    _lastUpdate = now;
-  }
-
-  bool _detectStationary(double accelMagnitude) {
-    const stationaryThreshold = 0.3;
-
-    if (accelMagnitude < stationaryThreshold) {
-      return true;
-    }
-
-    if (_speedEstimateMps < 0.5 && accelMagnitude < 0.5) {
-      return true;
-    }
-
-    return false;
-  }
-
-  double _lowPassFilter(double previous, double current, double alpha) {
-    return previous + alpha * (current - previous);
-  }
-
-  bool isTurning(double threshold) {
-    return _gyroZ.abs() > threshold;
-  }
-
-  double getMotionIntensity() {
-    final accelMagnitude = math.sqrt(_accelX * _accelX + _accelY * _accelY + _accelZ * _accelZ);
-    final gyroMagnitude = math.sqrt(_gyroX * _gyroX + _gyroY * _gyroY + _gyroZ * _gyroZ);
-
-    return (accelMagnitude / _gravityMagnitude + gyroMagnitude) / 2.0;
+  /// Corrects the integrator against a GPS fix, bounding drift by the fix
+  /// interval, and lets the estimator refine the forward axis.
+  void zeroAgainstGps(double gpsSpeedMps) {
+    _estimator.zeroAgainstGps(gpsSpeedMps);
   }
 
   /// Releases the sensor subscriptions without disposing the service, so a
   /// later trip can call [initialize] again. Previously only [dispose] cancelled
   /// them, which meant the accelerometer kept streaming after a trip ended.
   void stop() {
+    _cancelSubscriptions();
+    _isInitialized = false;
+    _headingRate = 0;
+    _lastUserAccelAt = null;
+    // The phone may be in a completely different pose next trip, so the learned
+    // orientation must not carry over.
+    _estimator.reset();
+    notifyListeners();
+  }
+
+  Future<void> _probeSensors() async {
+    try {
+      final completer = Completer<bool>();
+      StreamSubscription<AccelerometerEvent>? probe;
+      probe = accelerometerEventStream().listen(
+        (_) {
+          if (!completer.isCompleted) completer.complete(true);
+        },
+        onError: (_) {
+          if (!completer.isCompleted) completer.complete(false);
+        },
+      );
+
+      _isAvailable = await completer.future.timeout(
+        const Duration(seconds: 2),
+        onTimeout: () => false,
+      );
+      await probe.cancel();
+    } catch (_) {
+      _isAvailable = false;
+    }
+  }
+
+  void _startListening() {
+    final period = Duration(milliseconds: 1000 ~/ _sampleRateHz);
+
+    // Raw accelerometer, gravity included — used only to track which way down
+    // is, which is what makes the forward axis recoverable in any phone pose.
+    _accelSubscription =
+        accelerometerEventStream(samplingPeriod: period).listen(
+      (event) => _estimator.addRawAccel(Vector3(event.x, event.y, event.z)),
+      onError: _onSensorError,
+    );
+
+    // Platform-provided and genuinely gravity-compensated, unlike the
+    // hand-rolled subtraction this replaces.
+    _userAccelSubscription =
+        userAccelerometerEventStream(samplingPeriod: period).listen(
+      _onUserAccelerometerEvent,
+      onError: _onSensorError,
+    );
+
+    _gyroSubscription = gyroscopeEventStream(samplingPeriod: period).listen(
+      (event) => _headingRate = event.z,
+      onError: _onSensorError,
+    );
+  }
+
+  void _onUserAccelerometerEvent(UserAccelerometerEvent event) {
+    final now = DateTime.now();
+    final last = _lastUserAccelAt;
+    _lastUserAccelAt = now;
+    if (last == null) return;
+
+    final dt = now.difference(last).inMicroseconds / 1e6;
+    _estimator.addUserAccel(Vector3(event.x, event.y, event.z), dt);
+
+    final sample = MotionSample(
+      timestamp: now,
+      speedEstimateMps: _estimator.speedEstimateMps,
+      forwardAccelMps2: _estimator.lastForwardAccelMps2,
+      headingRateRadPerSec: _headingRate,
+      orientationKnown: _estimator.orientationKnown,
+    );
+    if (_sampleController.hasListener) {
+      _sampleController.add(sample);
+    }
+
+    _notifyThrottled(now);
+  }
+
+  void _notifyThrottled(DateTime now) {
+    final last = _lastNotifyAt;
+    if (last != null && now.difference(last) < _notifyInterval) return;
+    _lastNotifyAt = now;
+    notifyListeners();
+  }
+
+  void _onSensorError(Object error) {
+    _errorMessage = 'Sensor error: $error';
+    if (kDebugMode) {
+      debugPrint('[MotionSensor] $error');
+    }
+  }
+
+  void _cancelSubscriptions() {
     _accelSubscription?.cancel();
     _accelSubscription = null;
+    _userAccelSubscription?.cancel();
+    _userAccelSubscription = null;
     _gyroSubscription?.cancel();
     _gyroSubscription = null;
-    _isInitialized = false;
-    _speedEstimateMps = 0;
-    _lastUpdate = null;
-    notifyListeners();
   }
 
   @override
   void dispose() {
-    _accelSubscription?.cancel();
-    _gyroSubscription?.cancel();
+    _cancelSubscriptions();
+    _sampleController.close();
     super.dispose();
   }
 }

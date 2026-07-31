@@ -62,6 +62,12 @@ enum GpsStatus { inactive, active, lost }
 
 enum FusionStatus { gpsOnly, accelFusion, fullFusion }
 
+/// Smoothing and animation constants for the speed readout.
+///
+/// This used to offer `sport`/`normal`/`smooth` presets selectable via
+/// `setSensitivity()`, but nothing ever called that — the smoothing was always
+/// `normal`. The presets are gone; the type stays because
+/// [animationDurationMs] is still read by the speedometer widget.
 class SpeedSensitivityConfig {
   final double alpha;
   final int animationDurationMs;
@@ -73,22 +79,10 @@ class SpeedSensitivityConfig {
     required this.throttleInterval,
   });
 
-  static const sport = SpeedSensitivityConfig(
-    alpha: 0.5,
-    animationDurationMs: 16,
-    throttleInterval: Duration(milliseconds: 33),
-  );
-
   static const normal = SpeedSensitivityConfig(
     alpha: 0.35,
     animationDurationMs: 30,
     throttleInterval: Duration(milliseconds: 50),
-  );
-
-  static const smooth = SpeedSensitivityConfig(
-    alpha: 0.2,
-    animationDurationMs: 60,
-    throttleInterval: Duration(milliseconds: 100),
   );
 }
 
@@ -130,7 +124,7 @@ class GpsSpeedService extends ChangeNotifier {
   RiskData? _cachedRiskData;
   DateTime? _lastRiskCalcTime;
 
-  SpeedSensitivityConfig _sensitivity = SpeedSensitivityConfig.normal;
+  static const SpeedSensitivityConfig _sensitivity = SpeedSensitivityConfig.normal;
 
   int get currentSpeed => _currentSpeed;
   int get smoothedSpeed => _smoothedSpeed;
@@ -142,11 +136,6 @@ class GpsSpeedService extends ChangeNotifier {
   GpsStatus get gpsStatus => _gpsStatus;
   FusionStatus get fusionStatus => _fusionStatus;
   int get animationDurationMs => _sensitivity.animationDurationMs;
-
-  void setSensitivity(SpeedSensitivityConfig sensitivity) {
-    _sensitivity = sensitivity;
-    notifyListeners();
-  }
 
   SpeedSensitivityConfig get sensitivity => _sensitivity;
 
