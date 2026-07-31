@@ -104,6 +104,7 @@ class SettingsService extends ChangeNotifier {
   static const String _keyAwsCredentials = 'aws_credentials_encrypted';
   static const String _keyAutoUpload = 'auto_upload_enabled';
   static const String _keyFirstLaunch = 'first_launch_done';
+  static const String _keyKeepScreenOn = 'keep_screen_on';
 
   static const _secureStorage = FlutterSecureStorage();
   static const String _keyMasterSecret = 'aws_cred_master_key';
@@ -111,13 +112,19 @@ class SettingsService extends ChangeNotifier {
   SharedPreferences? _prefs;
   bool _isInitialized = false;
   bool _autoUploadEnabled = false;
+  bool _keepScreenOn = true;
 
   bool get isInitialized => _isInitialized;
   bool get autoUploadEnabled => _autoUploadEnabled;
 
+  /// Whether to hold the screen awake during a drive. On by default: the
+  /// common case is a cradled phone the driver glances at.
+  bool get keepScreenOn => _keepScreenOn;
+
   Future<void> init() async {
     _prefs = await SharedPreferences.getInstance();
     _autoUploadEnabled = _prefs?.getBool(_keyAutoUpload) ?? false;
+    _keepScreenOn = _prefs?.getBool(_keyKeepScreenOn) ?? true;
     _isInitialized = true;
   }
 
@@ -145,6 +152,12 @@ class SettingsService extends ChangeNotifier {
   Future<void> setAutoUpload(bool enabled) async {
     await _prefs?.setBool(_keyAutoUpload, enabled);
     _autoUploadEnabled = enabled;
+    notifyListeners();
+  }
+
+  Future<void> setKeepScreenOn(bool enabled) async {
+    await _prefs?.setBool(_keyKeepScreenOn, enabled);
+    _keepScreenOn = enabled;
     notifyListeners();
   }
 

@@ -1,4 +1,4 @@
-package com.example.dsls_app
+package com.dsls.app
 
 import io.flutter.embedding.android.FlutterActivity
 

@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/alert_service.dart';
+import '../services/driving_session_coordinator.dart';
+import '../services/settings_service.dart';
 import 'how_it_works_page.dart';
 import 'safety_disclaimer_page.dart';
 import 'developers_page.dart';
@@ -38,6 +40,10 @@ class SettingsScreen extends StatelessWidget {
 
           // Alert Settings Section
           _AlertSettingsSection(),
+
+          const SizedBox(height: 12),
+
+          _DrivingSection(),
 
           const SizedBox(height: 12),
 
@@ -116,6 +122,60 @@ class SettingsScreen extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+/// Settings that affect how a drive runs rather than how it alerts.
+class _DrivingSection extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    return Consumer<SettingsService>(
+      builder: (context, settings, child) {
+        return Card(
+          elevation: 2,
+          shape:
+              RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Row(
+                  children: [
+                    Icon(Icons.directions_car, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      "Driving",
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.screen_lock_portrait),
+                  title: const Text("Keep screen on"),
+                  subtitle: const Text(
+                    "For a cradled phone. Monitoring continues either way.",
+                  ),
+                  value: settings.keepScreenOn,
+                  onChanged: (value) async {
+                    await settings.setKeepScreenOn(value);
+                    if (!context.mounted) return;
+                    await context
+                        .read<DrivingSessionCoordinator>()
+                        .setKeepScreenOn(value);
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }

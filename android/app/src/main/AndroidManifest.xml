@@ -1,10 +1,22 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- Monitoring has to continue with the screen locked, which is the normal
+         way a phone sits during a drive. Requested in its own step, after its
+         own rationale — Android 11+ refuses to grant it alongside fine
+         location, and Play review requires a documented justification. -->
+    <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    
+
+    <!-- FOREGROUND_SERVICE, WAKE_LOCK and POST_NOTIFICATIONS come from
+         flutter_foreground_task's own manifest via the merger. The typed
+         permission is ours to declare, and must match the service's
+         foregroundServiceType below. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+
+
     <application
         android:label="Dynamic Speed"
         android:name="${applicationName}"
@@ -31,6 +43,14 @@
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
         </activity>
+        <!-- Keeps the drive alive when the screen locks or the app is
+             backgrounded. Without it Android trims the activity mid-journey and
+             monitoring silently stops. Name is fixed by the plugin. -->
+        <service
+            android:name="com.pravera.flutter_foreground_task.service.ForegroundService"
+            android:foregroundServiceType="location"
+            android:exported="false" />
+
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data

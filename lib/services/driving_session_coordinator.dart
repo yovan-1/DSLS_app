@@ -7,9 +7,11 @@ import '../models/speed_model/road_conditions.dart';
 import '../models/speed_model/speed_advisor.dart';
 import '../models/speed_model/speed_recommendation.dart';
 import 'alert_service.dart';
+import 'drive_foreground_service.dart';
 import 'gps_speed_service.dart';
 import 'location_speed_service.dart';
 import 'motion_sensor_service.dart';
+import 'screen_wake_controller.dart';
 import 'speed_service.dart';
 import 'trip_service.dart';
 import 'visibility_service.dart';
@@ -82,6 +84,8 @@ class DrivingSessionCoordinator extends ChangeNotifier {
   final VisibilityService _visibility;
   final MotionSensorService _motion;
   final WeatherService _weather;
+  final DriveForegroundService _foreground;
+  final ScreenWakeController _wakeController;
 
   /// No fix for this long and the displayed speed is no longer trustworthy.
   static const staleAfter = Duration(seconds: 5);
@@ -101,6 +105,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
 
   bool _isActive = false;
   bool _disposed = false;
+  bool _foregrounded = true;
   DateTime? _startedAt;
   DateTime? _lastFixAt;
   DateTime? _lastRecordAt;
@@ -121,13 +126,17 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     required VisibilityService visibility,
     required MotionSensorService motion,
     WeatherService? weather,
+    DriveForegroundService? foreground,
+    ScreenWakeController? wakeController,
   })  : _gps = gps,
         _speed = speed,
         _trips = trips,
         _alerts = alerts,
         _visibility = visibility,
         _motion = motion,
-        _weather = weather ?? WttrInWeatherService();
+        _weather = weather ?? WttrInWeatherService(),
+        _foreground = foreground ?? const NoopDriveForegroundService(),
+        _wakeController = wakeController ?? NoopScreenWakeController();
 
   bool get isActive => _isActive;
 
@@ -182,8 +191,26 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _speedSubscription = _gps.speedStream.listen(_onSpeedUpdate);
     _heartbeat = Timer.periodic(_heartbeatInterval, (_) => _onHeartbeat());
 
+    // The foreground service is what stops Android trimming the process when
+    // the screen locks — the single reason drives used to end mid-journey. The
+    // wakelock is the separate, cradled case.
+    _foregrounded = true;
+    unawaited(_foreground.start(
+      title: 'Monitoring your drive',
+      text: _notificationText(),
+    ));
+    unawaited(_wakeController.apply(sessionActive: true, foregrounded: true));
+
     _safeNotify();
     return true;
+  }
+
+  /// Notification content. Kept short — it is read at a glance, in a car.
+  String _notificationText() {
+    final s = state;
+    if (!s.isActive) return 'Not driving';
+    if (s.isStale) return 'Waiting for GPS';
+    return '${s.speedKph} km/h • recommended ${s.recommendedSpeedKph} km/h';
   }
 
   Future<void> stop() async {
@@ -203,6 +230,9 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _motion.stop();
     await _trips.endTrip();
 
+    await _foreground.stop();
+    await _wakeController.release();
+
     _speed.updateVisibility(null);
     _startedAt = null;
     _lastFixAt = null;
@@ -211,22 +241,40 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _safeNotify();
   }
 
+  /// Lets Settings turn the cradle wakelock on and off mid-drive.
+  Future<void> setKeepScreenOn(bool value) async {
+    _wakeController.enabled = value;
+    await _wakeController.apply(
+      sessionActive: _isActive,
+      foregrounded: _foregrounded,
+    );
+    _safeNotify();
+  }
+
+  bool get keepScreenOn => _wakeController.enabled;
+
   /// The app went to the background. The camera is about to be revoked, and a
   /// phone in a pocket cannot measure ambient light — so stop presenting the
   /// last thing the lens saw as if it were current. The speed model falls back
   /// to solar elevation and weather, which works in a pocket.
   Future<void> onAppPaused() async {
+    _foregrounded = false;
     if (!_isActive) return;
     await _visibility.suspend();
     _speed.updateVisibility(null);
     _gps.setRoadConditions(_speed.conditions);
+    // Holding the screen on for an app nobody can see is pure battery drain;
+    // the foreground service is what keeps the drive alive here.
+    await _wakeController.apply(sessionActive: true, foregrounded: false);
     _safeNotify();
   }
 
   /// Back in the foreground: re-acquire the camera if a drive is still running.
   Future<void> onAppResumed() async {
+    _foregrounded = true;
     if (!_isActive) return;
     await _visibility.resume();
+    await _wakeController.apply(sessionActive: true, foregrounded: true);
     _syncVisibility();
   }
 
@@ -284,7 +332,19 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _dispatchAlerts(speed, recommendation.recommendedSpeedKph);
     _recordIfDue(speed, recommendation);
 
+    _pushNotification();
     _safeNotify();
+  }
+
+  /// The notification is often the only thing visible during a drive, so it
+  /// carries the same figures the screen would. Pushed on every fix — the
+  /// event that changes them — and on the heartbeat, which is what notices a
+  /// fix has stopped arriving.
+  void _pushNotification() {
+    unawaited(_foreground.update(
+      title: 'Monitoring your drive',
+      text: _notificationText(),
+    ));
   }
 
   /// Over-speed fires once per episode. [SpeedAlertService] has its own
@@ -351,6 +411,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
       _gps.updateFromAccelerometer(_motion.speedEstimateMps);
     }
 
+    _pushNotification();
     _safeNotify();
   }
 

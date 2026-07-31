@@ -3,7 +3,9 @@ import 'package:provider/provider.dart';
 import '../services/driving_session_coordinator.dart';
 import '../services/gps_speed_service.dart';
 import '../services/location_speed_service.dart';
+import '../services/permission_flow.dart';
 import '../services/visibility_service.dart';
+import '../widgets/permission_rationale_sheet.dart';
 import '../widgets/speedometer_widget.dart';
 import '../widgets/zone_alert_widget.dart';
 import '../widgets/parameter_cards.dart';
@@ -204,12 +206,42 @@ class SpeedScreen extends StatelessWidget {
         }
 
         final messenger = ScaffoldMessenger.of(context);
-        final started = await coordinator.start();
-        if (started) return;
 
-        final error = coordinator.state.errorMessage;
-        if (error != null) {
-          messenger.showSnackBar(SnackBar(content: Text(error)));
+        // Ask before starting, one permission at a time, each behind its own
+        // rationale. Only fine location blocks — the rest degrade.
+        final permissions = await const PermissionFlow().requestForDrive(
+          showRationale: (step) => PermissionRationaleSheet.show(context, step),
+        );
+
+        if (!permissions.canDrive) {
+          messenger.showSnackBar(const SnackBar(
+            content: Text(
+              'Location access is required to monitor your driving.',
+            ),
+          ));
+          return;
+        }
+
+        final started = await coordinator.start();
+        if (!started) {
+          final error = coordinator.state.errorMessage;
+          if (error != null) {
+            messenger.showSnackBar(SnackBar(content: Text(error)));
+          }
+          return;
+        }
+
+        // Say plainly what the drive will and will not do, rather than letting
+        // the user discover at the roadside that it stopped when the screen
+        // locked.
+        if (!permissions.survivesScreenLock) {
+          messenger.showSnackBar(const SnackBar(
+            content: Text(
+              'Monitoring may stop when your screen locks — grant background '
+              'location and notifications to keep it running.',
+            ),
+            duration: Duration(seconds: 6),
+          ));
         }
       },
       child: Row(

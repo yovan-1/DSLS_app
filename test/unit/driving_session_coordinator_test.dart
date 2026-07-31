@@ -7,7 +7,9 @@ import 'package:dsls_app/models/speed_model/solar_position.dart';
 import 'package:dsls_app/models/speed_model/speed_advisor.dart';
 import 'package:dsls_app/models/weather_data.dart';
 import 'package:dsls_app/services/alert_service.dart';
+import 'package:dsls_app/services/drive_foreground_service.dart';
 import 'package:dsls_app/services/driving_session_coordinator.dart';
+import 'package:dsls_app/services/screen_wake_controller.dart';
 import 'package:dsls_app/services/gps_speed_service.dart';
 import 'package:dsls_app/services/location_speed_service.dart';
 import 'package:dsls_app/services/motion_sensor_service.dart';
@@ -214,6 +216,52 @@ class StubMotionService extends MotionSensorService {
   void stop() {}
 }
 
+class RecordingForegroundService implements DriveForegroundService {
+  bool running = false;
+  int startCount = 0;
+  int stopCount = 0;
+  String lastText = '';
+
+  @override
+  Future<void> start({required String title, required String text}) async {
+    running = true;
+    startCount++;
+    lastText = text;
+  }
+
+  @override
+  Future<void> update({required String title, required String text}) async {
+    if (!running) return;
+    lastText = text;
+  }
+
+  @override
+  Future<void> stop() async {
+    running = false;
+    stopCount++;
+  }
+}
+
+class RecordingWakeController implements ScreenWakeController {
+  @override
+  bool enabled = true;
+
+  bool held = false;
+
+  @override
+  Future<void> apply({
+    required bool sessionActive,
+    required bool foregrounded,
+  }) async {
+    held = enabled && sessionActive && foregrounded;
+  }
+
+  @override
+  Future<void> release() async {
+    held = false;
+  }
+}
+
 class StubWeatherService implements WeatherService {
   int calls = 0;
 
@@ -247,6 +295,8 @@ void main() {
   late TripService trips;
   late RecordingAlertService alerts;
   late StubVisibilityService visibility;
+  late RecordingForegroundService foreground;
+  late RecordingWakeController wake;
   late DrivingSessionCoordinator coordinator;
 
   setUp(() {
@@ -255,6 +305,8 @@ void main() {
     trips = TripService();
     alerts = RecordingAlertService();
     visibility = StubVisibilityService();
+    foreground = RecordingForegroundService();
+    wake = RecordingWakeController();
     coordinator = DrivingSessionCoordinator(
       gps: gps,
       speed: speed,
@@ -263,6 +315,8 @@ void main() {
       visibility: visibility,
       motion: StubMotionService(),
       weather: StubWeatherService(),
+      foreground: foreground,
+      wakeController: wake,
     );
   });
 
@@ -506,6 +560,123 @@ void main() {
       await settle();
 
       expect(visibility.lastReportedSpeed, 95);
+    });
+  });
+
+  group('surviving the screen lock', () {
+    test('starting a drive starts the foreground service', () async {
+      await coordinator.start();
+
+      expect(foreground.running, isTrue,
+          reason: 'without it Android trims the process and the drive ends');
+    });
+
+    test('stopping a drive stops the foreground service', () async {
+      await coordinator.start();
+
+      await coordinator.stop();
+
+      expect(foreground.running, isFalse);
+      expect(foreground.stopCount, 1);
+    });
+
+    test('the service keeps running while the app is backgrounded', () async {
+      await coordinator.start();
+
+      await coordinator.onAppPaused();
+
+      expect(foreground.running, isTrue,
+          reason: 'the locked screen is exactly what it is there for');
+    });
+
+    test('the notification carries the current figures', () async {
+      await coordinator.start();
+      gps.emit(0.6, 30.6, 72);
+      await settle();
+
+      expect(foreground.lastText, contains('72 km/h'));
+      expect(foreground.lastText, contains('recommended'));
+    });
+
+    test('a failed start does not leave a service running', () async {
+      final deadGps = RefusingGpsService();
+      final orphaned = RecordingForegroundService();
+      final stalled = DrivingSessionCoordinator(
+        gps: deadGps,
+        speed: speed,
+        trips: TripService(),
+        alerts: alerts,
+        visibility: StubVisibilityService(),
+        motion: StubMotionService(),
+        weather: StubWeatherService(),
+        foreground: orphaned,
+      );
+      addTearDown(stalled.dispose);
+
+      await stalled.start();
+
+      expect(orphaned.running, isFalse);
+    });
+  });
+
+  group('screen wakelock', () {
+    test('is held while driving in the foreground', () async {
+      await coordinator.start();
+
+      expect(wake.held, isTrue);
+    });
+
+    test('is released when the app is backgrounded', () async {
+      await coordinator.start();
+
+      await coordinator.onAppPaused();
+
+      expect(wake.held, isFalse,
+          reason: 'holding a screen nobody can see is pure battery drain');
+    });
+
+    test('is re-taken when the app returns', () async {
+      await coordinator.start();
+      await coordinator.onAppPaused();
+
+      await coordinator.onAppResumed();
+
+      expect(wake.held, isTrue);
+    });
+
+    test('is released when the drive ends', () async {
+      await coordinator.start();
+
+      await coordinator.stop();
+
+      expect(wake.held, isFalse);
+    });
+
+    test('is not taken when the user has turned it off', () async {
+      wake.enabled = false;
+
+      await coordinator.start();
+
+      expect(wake.held, isFalse);
+    });
+
+    test('can be turned off mid-drive', () async {
+      await coordinator.start();
+      expect(wake.held, isTrue);
+
+      await coordinator.setKeepScreenOn(false);
+
+      expect(wake.held, isFalse);
+      expect(coordinator.keepScreenOn, isFalse);
+    });
+
+    test('turning it off does not stop the drive', () async {
+      await coordinator.start();
+
+      await coordinator.setKeepScreenOn(false);
+
+      expect(coordinator.isActive, isTrue);
+      expect(foreground.running, isTrue);
     });
   });
 

@@ -7,7 +7,9 @@ import 'services/trip_service.dart';
 import 'services/speed_service.dart';
 import 'services/alert_service.dart';
 import 'services/gps_speed_service.dart';
+import 'services/drive_foreground_service.dart';
 import 'services/driving_session_coordinator.dart';
+import 'services/screen_wake_controller.dart';
 import 'services/visibility_service.dart';
 import 'services/offline_storage_service.dart';
 import 'services/motion_sensor_service.dart';
@@ -70,6 +72,10 @@ void main() async {
       alerts: alertService,
       visibility: visibilityService,
       motion: motionService,
+      foreground: PlatformDriveForegroundService(),
+      wakeController: PlatformScreenWakeController(
+        enabled: settingsService.keepScreenOn,
+      ),
     );
 
     runApp(

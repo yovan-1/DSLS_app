@@ -88,15 +88,23 @@ class VisibilityService extends ChangeNotifier {
 
   Future<void> initialize() async {
     if (_isDisposed) return;
-    if (_isInitialized || _permissionDenied) return;
+    if (_isInitialized) return;
 
     _suspended = false;
+    // Re-checked on every attempt rather than latched: the user may have
+    // granted the camera in Settings since the last try.
+    _permissionDenied = false;
 
     try {
-      var status = await Permission.camera.request();
-      if (status.isDenied || status.isPermanentlyDenied) {
+      // Check, do not request. Firing a bare system prompt from here is what
+      // the app used to do, with no explanation of what the camera is for —
+      // PermissionFlow now asks properly, behind a rationale, before the drive
+      // starts. If the answer was no, this service simply stays quiet and the
+      // model falls back to solar elevation and weather.
+      final status = await Permission.camera.status;
+      if (!status.isGranted) {
         _permissionDenied = true;
-        debugPrint("[VisibilityService] Camera permission denied");
+        debugPrint("[VisibilityService] Camera permission not granted");
         notifyListeners();
         return;
       }
