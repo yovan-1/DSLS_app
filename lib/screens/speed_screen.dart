@@ -2,6 +2,7 @@ import 'package:flutter/material.dart' hide DayPeriod;
 import 'package:provider/provider.dart';
 import '../services/driving_session_coordinator.dart';
 import '../services/gps_speed_service.dart';
+import '../models/speed_model/road_conditions.dart' show LimitSource;
 import '../services/location_speed_service.dart';
 import '../services/permission_flow.dart';
 import '../services/visibility_service.dart';
@@ -91,12 +92,30 @@ class SpeedScreen extends StatelessWidget {
     );
   }
 
-  /// Outside the mapped zones and roads the app has no idea what the real limit
-  /// is and falls back to a flat 60 km/h. Say so, rather than presenting the
-  /// guess with the same confidence as a matched zone.
+  /// Says how much the app actually knows about the current limit.
+  ///
+  /// Three cases, and they are genuinely different. Off any mapped road there
+  /// is no limit at all, only a flat fallback. On a mapped road the limit is
+  /// usually derived from the road's class rather than a posted sign — just
+  /// 1.6% of ways in the shipped extract carry a `maxspeed` tag — and saying so
+  /// is the difference between an estimate and a claim. Only a posted limit or
+  /// a curated zone is presented without a caveat.
   Widget _buildUnmappedRoadNotice(DrivingSessionState state) {
     if (!state.isActive) return const SizedBox.shrink();
-    if (state.locationResult.status != LocationSpeedStatus.none) {
+
+    final location = state.locationResult;
+    final String message;
+    final IconData icon;
+
+    if (location.status == LocationSpeedStatus.none) {
+      icon = Icons.help_outline;
+      message = "No mapped speed limit here — showing a conservative default. "
+          "Follow the posted signs.";
+    } else if (location.limitSource == LimitSource.inferred) {
+      icon = Icons.info_outline;
+      message = "Limit estimated from the road type, not a posted sign. "
+          "Follow the signs.";
+    } else {
       return const SizedBox.shrink();
     }
 
@@ -111,12 +130,11 @@ class SpeedScreen extends StatelessWidget {
       ),
       child: Row(
         children: [
-          Icon(Icons.help_outline, color: Colors.amber.shade800, size: 20),
+          Icon(icon, color: Colors.amber.shade800, size: 20),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
-              "No mapped speed limit here — showing a conservative default. "
-              "Follow the posted signs.",
+              message,
               style: TextStyle(color: Colors.amber.shade900, fontSize: 13),
             ),
           ),

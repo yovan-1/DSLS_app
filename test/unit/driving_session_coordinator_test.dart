@@ -136,7 +136,11 @@ class FakeSpeedService extends SpeedService {
       );
 
   @override
-  void updatePosition(double lat, double lon, {double speedKph = 0}) {
+  Future<void> updatePosition(
+    double lat,
+    double lon, {
+    double speedKph = 0,
+  }) async {
     updatePositionCalls++;
     lastSpeedKph = speedKph;
   }

@@ -7,6 +7,7 @@ import '../models/speed_model/speed_recommendation.dart';
 import 'offline_storage_service.dart';
 import 'cloud_upload_service.dart';
 import 'settings_service.dart';
+import 'trip_repository.dart';
 
 class DrivingRecord {
   final int speed;
@@ -36,6 +37,7 @@ class TripService extends ChangeNotifier {
   OfflineStorageService? _storage;
   CloudUploadService? _cloudUploadService;
   SettingsService? _settingsService;
+  TripRepository? _repository;
 
   final List<DrivingRecord> _drivingRecords = [];
   Timer? _recordingTimer;
@@ -56,12 +58,37 @@ class TripService extends ChangeNotifier {
     _settingsService = service;
   }
 
+  /// Once a repository is attached it becomes the source of truth;
+  /// [OfflineStorageService] is kept only as the migration source and as a
+  /// fallback if the database could not be opened.
+  void setRepository(TripRepository repository) {
+    _repository = repository;
+  }
+
   Future<void> loadTrips() async {
+    if (_repository != null) {
+      // One-shot import of the old SharedPreferences blob, so pilot testers
+      // keep their history. Counts come across exactly as recorded.
+      final storage = _storage;
+      if (storage != null) {
+        await _repository!.migrateFromLegacy(storage.getTrips);
+      }
+      _trips = await _repository!.loadTrips();
+      notifyListeners();
+      return;
+    }
+
     if (_storage != null) {
       _trips = await _storage!.getTrips();
       notifyListeners();
     }
   }
+
+  /// The per-second samples recorded for a past trip. Before these were
+  /// persisted, the behaviour percentages were computed from an in-memory list
+  /// that cleared on the next trip.
+  Future<List<DrivingRecord>> recordsFor(String tripId) async =>
+      _repository?.recordsFor(tripId) ?? Future.value(const []);
 
   List<DrivingRecord> get drivingRecords => _drivingRecords;
   int get recordCount => _drivingRecords.length;
@@ -121,12 +148,22 @@ class TripService extends ChangeNotifier {
 
   int get totalTrips => _trips.length;
 
+  /// Total distance driven, in kilometres.
+  ///
+  /// Uses the distance actually integrated from GPS fixes during the trip.
+  /// Trips recorded before that field was written fall back to
+  /// `duration x avgSpeed`, which is what every trip used to use — an estimate
+  /// that ignores stops and treats the average as if it were held throughout.
   int get totalDistance {
-    int total = 0;
+    var total = 0;
     for (final trip in _trips) {
-      final dur = trip.duration;
-      if (dur != null) {
-        total += (dur.inMinutes * trip.avgSpeed / 60).round();
+      if (trip.distanceTraveledMeters > 0) {
+        total += (trip.distanceTraveledMeters / 1000).round();
+        continue;
+      }
+      final duration = trip.duration;
+      if (duration != null) {
+        total += (duration.inMinutes * trip.avgSpeed / 60).round();
       }
     }
     return total;
@@ -203,6 +240,9 @@ class TripService extends ChangeNotifier {
 
   void startTrip(RoadConditions conditions) {
     _drivingRecords.clear();
+    _speedSum = 0;
+    _distanceMetres = 0;
+    _riskSum = 0;
     final recommendation = SpeedAdvisor.evaluate(conditions);
     _currentTrip = TripData(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
@@ -215,10 +255,30 @@ class TripService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Running totals, so the per-record update is O(1). `avgSpeed` used to refold
+  // the entire record list on every append, which is O(n^2) over a trip — about
+  // 26 million additions across a two-hour drive.
+  int _speedSum = 0;
+  double _distanceMetres = 0;
+  int _riskSum = 0;
+
+  /// Metres travelled so far, integrated from the fixes reported by the
+  /// coordinator. Replaces deriving distance from `duration x avgSpeed`.
+  double get distanceMetres => _distanceMetres;
+
+  /// Adds a measured leg to the trip's distance.
+  void addDistance(double metres) {
+    if (!_isTracking || metres <= 0) return;
+    _distanceMetres += metres;
+  }
+
   void addRecord({
     required int speed,
     required int recommendedSpeed,
     required RiskBand riskBand,
+    int? roadId,
+    int? actualSpeedLimit,
+    String? surface,
   }) {
     if (!_isTracking) return;
 
@@ -226,6 +286,10 @@ class TripService extends ChangeNotifier {
 
     final now = DateTime.now();
     final isOverSpeed = speed > recommendedSpeed;
+    // The previous state, read before this record is appended.
+    final wasOverSpeed =
+        _drivingRecords.isNotEmpty && _drivingRecords.last.isOverSpeed;
+
     final record = DrivingRecord(
       speed: speed,
       recommendedSpeed: recommendedSpeed,
@@ -234,19 +298,15 @@ class TripService extends ChangeNotifier {
       timestamp: now,
     );
     _drivingRecords.add(record);
+    _speedSum += speed;
+    _riskSum += riskBand.index;
 
-    final alerts = List<SpeedAlert>.from(_currentTrip!.alerts);
+    var alerts = List<SpeedAlert>.from(_currentTrip!.alerts);
     var overSpeedCount = _currentTrip!.overSpeedCount;
 
-    // Count over-speed *episodes*, not samples. This used to fire on every
-    // record, so a single 10-second overspeed was logged as one alert per
-    // sampling tick — making the count a function of the recording rate rather
-    // than of how the trip was actually driven. Only the rising edge counts;
-    // `_drivingRecords.last` is the record just added, so the one before it is
-    // the previous state.
-    final wasOverSpeed = _drivingRecords.length >= 2 &&
-        _drivingRecords[_drivingRecords.length - 2].isOverSpeed;
-
+    // Over-speed is an episode with a start, an end and a peak — not a series
+    // of independent point events. It used to be logged once per sample, so
+    // the count described the recording rate rather than the driving.
     if (isOverSpeed && !wasOverSpeed) {
       overSpeedCount++;
       alerts.add(
@@ -254,24 +314,37 @@ class TripService extends ChangeNotifier {
           id: now.microsecondsSinceEpoch.toString(),
           time: now,
           speed: speed,
+          peakSpeed: speed,
           recommendedSpeed: recommendedSpeed,
           type: AlertType.overSpeed,
         ),
       );
+    } else if (isOverSpeed && alerts.isNotEmpty && alerts.last.isOpen) {
+      // Still over: track the worst speed reached.
+      if (speed > alerts.last.peakSpeed) {
+        alerts[alerts.length - 1] = alerts.last.copyWith(peakSpeed: speed);
+      }
+    } else if (!isOverSpeed && alerts.isNotEmpty && alerts.last.isOpen) {
+      // Back under the limit: close the episode.
+      alerts[alerts.length - 1] = alerts.last.copyWith(endTime: now);
     }
 
     final maxSpeed = speed > _currentTrip!.maxSpeed ? speed : _currentTrip!.maxSpeed;
-    final avgSpeed = (_drivingRecords
-                .map((record) => record.speed)
-                .fold<int>(0, (total, value) => total + value) /
-            _drivingRecords.length)
-        .round();
+    final avgSpeed = (_speedSum / _drivingRecords.length).round();
 
     _currentTrip = _currentTrip!.copyWith(
       maxSpeed: maxSpeed,
       avgSpeed: avgSpeed,
       overSpeedCount: overSpeedCount,
       alerts: alerts,
+      // Written per record so the trip carries where it was driven, not just
+      // how fast. These five fields were declared, uploaded to S3 and never
+      // assigned — every uploaded trip had five null or zero columns.
+      roadSegmentId: roadId?.toString(),
+      actualSpeedLimit: actualSpeedLimit,
+      estimatedSurface: surface,
+      avgRiskScore: _riskSum / _drivingRecords.length,
+      distanceTraveledMeters: _distanceMetres.round(),
     );
 
     notifyListeners();
@@ -294,11 +367,24 @@ class TripService extends ChangeNotifier {
   Future<void> endTrip() async {
     if (_currentTrip != null) {
       stopRecording();
-      final completedTrip = _currentTrip!.copyWith(endTime: DateTime.now());
+      final now = DateTime.now();
+
+      // A trip that ends mid-overspeed would otherwise leave its last episode
+      // open forever, with no end time and no duration.
+      final alerts = List<SpeedAlert>.from(_currentTrip!.alerts);
+      if (alerts.isNotEmpty && alerts.last.isOpen) {
+        alerts[alerts.length - 1] = alerts.last.copyWith(endTime: now);
+      }
+
+      final completedTrip = _currentTrip!.copyWith(
+        endTime: now,
+        alerts: alerts,
+        distanceTraveledMeters: _distanceMetres.round(),
+      );
       _trips.add(completedTrip);
       _currentTrip = null;
       _isTracking = false;
-      await _saveTrips();
+      await _saveTrip(completedTrip);
 
       if (_cloudUploadService != null &&
           _settingsService?.autoUploadEnabled == true) {
@@ -311,20 +397,35 @@ class TripService extends ChangeNotifier {
 
   Future<void> deleteTrip(String id) async {
     _trips.removeWhere((t) => t.id == id);
-    await _saveTrips();
+    if (_repository != null) {
+      await _repository!.deleteTrip(id);
+    } else {
+      await _storage?.saveTrips(_trips);
+    }
     notifyListeners();
   }
 
   Future<void> clearHistory() async {
     _trips.clear();
-    await _saveTrips();
+    if (_repository != null) {
+      await _repository!.clear();
+    } else {
+      await _storage?.saveTrips(_trips);
+    }
     notifyListeners();
   }
 
-  Future<void> _saveTrips() async {
-    if (_storage != null) {
-      await _storage!.saveTrips(_trips);
+  /// Persists one trip and its records.
+  ///
+  /// The old path rewrote the entire history as one JSON string on every
+  /// mutation, so both saving and loading were O(total history) and grew
+  /// without bound. Writing a single trip is now a bounded operation.
+  Future<void> _saveTrip(TripData trip) async {
+    if (_repository != null) {
+      await _repository!.saveTrip(trip, records: _drivingRecords);
+      return;
     }
+    await _storage?.saveTrips(_trips);
   }
 
   Map<String, dynamic> toJson() => {

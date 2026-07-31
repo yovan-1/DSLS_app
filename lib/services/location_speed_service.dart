@@ -3,6 +3,7 @@ import '../models/speed_zone.dart';
 import '../models/road_segment.dart' show RoadSegment, LocationUtils;
 import '../models/speed_calculator.dart';
 import '../models/speed_model/road_conditions.dart' show LimitSource;
+import 'road_database.dart';
 
 enum LocationSpeedStatus {
   none,
@@ -24,6 +25,17 @@ class LocationSpeedResult {
   /// curated ones already account for their surroundings.
   final LimitSource limitSource;
 
+  /// Identifier of the matched road in the offline database, when the match
+  /// came from there. Recorded against the trip.
+  final int? roadId;
+
+  /// OSM `lit`. Null means *not surveyed* rather than unlit — only 0.8% of
+  /// ways in the shipped extract carry the tag.
+  final bool? isLit;
+
+  /// OSM `surface`, e.g. `asphalt`, `unpaved`. Null when not surveyed.
+  final String? surface;
+
   const LocationSpeedResult({
     required this.locationType,
     required this.speedLimit,
@@ -31,6 +43,9 @@ class LocationSpeedResult {
     required this.activeRoadName,
     required this.status,
     this.limitSource = LimitSource.curated,
+    this.roadId,
+    this.isLit,
+    this.surface,
   });
 
   /// Used when the driver is outside every mapped zone and road. The 60 km/h is
@@ -88,6 +103,18 @@ class LocationSpeedService extends ChangeNotifier {
   int _candidateRoadFixes = 0;
   String? _activeRoadId;
 
+  /// The offline OSM road database, when one is available. Curated [SpeedZone]s
+  /// still take priority over it — they exist to cover what OSM does not tag,
+  /// such as a particular school gate.
+  RoadDatabase? _roadDatabase;
+
+  void attachRoadDatabase(RoadDatabase database) {
+    _roadDatabase = database;
+    notifyListeners();
+  }
+
+  bool get hasRoadDatabase => _roadDatabase?.isOpen ?? false;
+
   void initialize(List<SpeedZone> zones, List<RoadSegment> roads) {
     _zones.clear();
     _zones.addAll(zones);
@@ -99,13 +126,49 @@ class LocationSpeedService extends ChangeNotifier {
 
   /// [speedKph] scales the approach ring; without it an approach alert can only
   /// fire once the driver is already inside the zone.
-  void updatePosition(double lat, double lon, {double speedKph = 0}) {
+  ///
+  /// Zones resolve synchronously, so a school-zone alert is never held up by a
+  /// database read. The road lookup then refines the result if no zone claimed
+  /// the position.
+  Future<void> updatePosition(
+    double lat,
+    double lon, {
+    double speedKph = 0,
+  }) async {
     _previousLat = _currentLat;
     _previousLon = _currentLon;
     _currentLat = lat;
     _currentLon = lon;
     _calculateActiveLocation(speedKph);
     notifyListeners();
+
+    if (_currentResult.status != LocationSpeedStatus.none) return;
+    final database = _roadDatabase;
+    if (database == null || !database.isOpen) return;
+
+    try {
+      final match = await database.nearestRoad(lat, lon);
+      // The driver may have moved on while the query ran, and a stale answer
+      // is worse than none.
+      if (match == null || _currentLat != lat || _currentLon != lon) return;
+      if (_currentResult.status != LocationSpeedStatus.none) return;
+
+      _currentResult = LocationSpeedResult(
+        locationType: match.locationType,
+        speedLimit: match.speedLimitKph,
+        activeZoneName: '',
+        // Only ~2.5% of ways in the extract are named, so this is usually blank.
+        activeRoadName: match.name ?? '',
+        status: LocationSpeedStatus.onRoad,
+        limitSource: match.limitSource,
+        roadId: match.id,
+        isLit: match.isLit,
+        surface: match.surface,
+      );
+      notifyListeners();
+    } catch (e) {
+      debugPrint('[LocationSpeed] Road lookup failed: $e');
+    }
   }
 
   double? _previousLat;

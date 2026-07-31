@@ -3,12 +3,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/dashboard.dart';
+import 'services/trip_repository.dart';
 import 'services/trip_service.dart';
 import 'services/speed_service.dart';
 import 'services/alert_service.dart';
 import 'services/gps_speed_service.dart';
 import 'services/drive_foreground_service.dart';
 import 'services/driving_session_coordinator.dart';
+import 'services/road_database.dart';
 import 'services/screen_wake_controller.dart';
 import 'services/visibility_service.dart';
 import 'services/offline_storage_service.dart';
@@ -54,6 +56,19 @@ void main() async {
     tripService.setStorage(storage);
     tripService.setCloudUploadService(cloudUploadService);
     tripService.setSettingsService(settingsService);
+
+    // Trips move from a single SharedPreferences JSON blob into SQLite.
+    // `loadTrips` performs the one-shot import of any existing blob, so a
+    // pilot tester's history survives the upgrade. If the database cannot be
+    // opened, TripService silently keeps using the old blob rather than losing
+    // the ability to record.
+    final tripRepository = TripRepository();
+    try {
+      await tripRepository.open();
+      tripService.setRepository(tripRepository);
+    } catch (e) {
+      debugPrint('[main] Trip database unavailable, using legacy storage: $e');
+    }
     await tripService.loadTrips();
 
     // Built here rather than with lazy `create:` providers so that construction
@@ -61,6 +76,20 @@ void main() async {
     // lifetime has to be independent of any widget, since the whole point is
     // that a drive survives the screen going away.
     final speedService = SpeedService();
+
+    // Best-effort: without the road database the app falls back to curated
+    // zones and its conservative default, which is exactly what it did before
+    // the database existed. A failure here must not stop the app starting.
+    final roadDatabase = RoadDatabase();
+    try {
+      await roadDatabase.open();
+      speedService.attachRoadDatabase(roadDatabase);
+      debugPrint('[main] Road database: ${roadDatabase.metadata['way_count']} '
+          'ways, built ${roadDatabase.metadata['built_utc']}');
+    } catch (e) {
+      debugPrint('[main] Road database unavailable: $e');
+    }
+
     final gpsService = GpsSpeedService();
     final visibilityService = VisibilityService();
     final motionService = MotionSensorService();

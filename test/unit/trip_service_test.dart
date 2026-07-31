@@ -76,6 +76,90 @@ void main() {
     });
   });
 
+  group('alert episodes', () {
+    test('an episode tracks the worst speed reached, not just the first', () {
+      record(85);
+      record(110);
+      record(95);
+
+      final alert = trips.currentTrip!.alerts.single;
+      expect(alert.speed, 85, reason: 'the speed the episode opened at');
+      expect(alert.peakSpeed, 110, reason: 'the worst point of the episode');
+    });
+
+    test('an episode closes when the driver comes back under', () {
+      record(90);
+      record(90);
+      record(40);
+
+      final alert = trips.currentTrip!.alerts.single;
+      expect(alert.isOpen, isFalse);
+      expect(alert.endTime, isNotNull);
+    });
+
+    test('an episode stays open while the driver is still over', () {
+      record(90);
+      record(90);
+
+      expect(trips.currentTrip!.alerts.single.isOpen, isTrue);
+    });
+
+    test('a trip ending mid-overspeed still closes its episode', () async {
+      record(90);
+      expect(trips.currentTrip!.alerts.single.isOpen, isTrue);
+
+      await trips.endTrip();
+
+      expect(trips.trips.single.alerts.single.isOpen, isFalse,
+          reason: 'an open episode would have no duration for ever');
+    });
+  });
+
+  group('distance', () {
+    /// Distance used to be derived from `duration x avgSpeed`, which counts
+    /// time spent stationary at a junction as ground covered.
+    test('accumulates measured legs', () {
+      trips.addDistance(1200);
+      trips.addDistance(800);
+
+      expect(trips.distanceMetres, 2000);
+    });
+
+    test('is written onto the completed trip', () async {
+      record(50);
+      trips.addDistance(4321);
+
+      await trips.endTrip();
+
+      expect(trips.trips.single.distanceTraveledMeters, 4321);
+    });
+
+    test('ignores non-positive legs', () {
+      trips.addDistance(100);
+      trips.addDistance(0);
+      trips.addDistance(-50);
+
+      expect(trips.distanceMetres, 100);
+    });
+
+    test('resets between trips', () {
+      trips.addDistance(500);
+      trips.startTrip(_conditions);
+
+      expect(trips.distanceMetres, 0);
+    });
+  });
+
+  group('risk score', () {
+    test('averages the risk bands actually recorded', () {
+      // RiskBand.low has index 0, so an all-low trip averages to zero.
+      record(40);
+      record(40);
+
+      expect(trips.currentTrip!.avgRiskScore, 0);
+    });
+  });
+
   group('trip statistics', () {
     test('tracks max and average speed across records', () {
       record(40);

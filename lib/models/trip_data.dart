@@ -84,7 +84,10 @@ class TripData {
     'id': id,
     'startTime': startTime.toIso8601String(),
     'endTime': endTime?.toIso8601String(),
-    'location': location.index,
+    // By name, not index. LocationType has already grown from six values to
+    // eight and only survived index-based storage because the new members
+    // happened to be appended.
+    'location': location.name,
     'baseSpeedLimit': baseSpeedLimit,
     'recommendedSpeed': recommendedSpeed,
     'maxSpeed': maxSpeed,
@@ -102,7 +105,7 @@ class TripData {
     id: json['id'],
     startTime: DateTime.parse(json['startTime']),
     endTime: json['endTime'] != null ? DateTime.parse(json['endTime']) : null,
-    location: LocationType.values[json['location']],
+    location: _locationTypeFrom(json['location']),
     baseSpeedLimit: json['baseSpeedLimit'],
     recommendedSpeed: json['recommendedSpeed'],
     maxSpeed: json['maxSpeed'] ?? 0,
@@ -119,38 +122,107 @@ class TripData {
     avgRiskScore: (json['avgRiskScore'] ?? 0.0).toDouble(),
     distanceTraveledMeters: json['distanceTraveledMeters'] ?? 0,
   );
+
+  /// Accepts both the current name form and the legacy index form.
+  static LocationType _locationTypeFrom(Object? raw) {
+    if (raw is int) {
+      return raw >= 0 && raw < LocationType.values.length
+          ? LocationType.values[raw]
+          : LocationType.urban;
+    }
+    return LocationType.values.firstWhere(
+      (v) => v.name == raw,
+      orElse: () => LocationType.urban,
+    );
+  }
 }
 
+/// One alert *episode* — a continuous stretch where the driver was over the
+/// recommended speed — rather than a single sample.
+///
+/// [time] opens the episode, [endTime] closes it and [peakSpeed] is the worst
+/// speed reached while it was open. Before this, one over-limit stretch
+/// produced an alert per sample, so a half-hour of speeding logged thousands of
+/// them and any statistic derived from the count described the recording rate
+/// rather than the driving.
 class SpeedAlert {
   final String id;
   final DateTime time;
+
+  /// Null while the episode is still open.
+  final DateTime? endTime;
+
+  /// The speed at the moment the episode opened.
   final int speed;
+
+  /// The worst speed reached during the episode. Defaults to [speed] for a
+  /// freshly opened episode and for records migrated from the old format,
+  /// where only the opening sample was kept.
+  final int peakSpeed;
+
   final int recommendedSpeed;
   final AlertType type;
 
   SpeedAlert({
     required this.id,
     required this.time,
+    this.endTime,
     required this.speed,
+    int? peakSpeed,
     required this.recommendedSpeed,
     required this.type,
-  });
+  }) : peakSpeed = peakSpeed ?? speed;
+
+  Duration? get duration => endTime?.difference(time);
+
+  bool get isOpen => endTime == null;
+
+  SpeedAlert copyWith({DateTime? endTime, int? peakSpeed}) => SpeedAlert(
+        id: id,
+        time: time,
+        endTime: endTime ?? this.endTime,
+        speed: speed,
+        peakSpeed: peakSpeed ?? this.peakSpeed,
+        recommendedSpeed: recommendedSpeed,
+        type: type,
+      );
 
   Map<String, dynamic> toJson() => {
     'id': id,
     'time': time.toIso8601String(),
+    'endTime': endTime?.toIso8601String(),
     'speed': speed,
+    'peakSpeed': peakSpeed,
     'recommendedSpeed': recommendedSpeed,
-    'type': type.index,
+    // By name, not index. AlertType currently has four values of which only
+    // one is ever constructed; reordering or pruning it must not silently
+    // rewrite stored history.
+    'type': type.name,
   };
 
   factory SpeedAlert.fromJson(Map<String, dynamic> json) => SpeedAlert(
     id: json['id'],
     time: DateTime.parse(json['time']),
+    endTime:
+        json['endTime'] != null ? DateTime.parse(json['endTime']) : null,
     speed: json['speed'],
+    peakSpeed: json['peakSpeed'],
     recommendedSpeed: json['recommendedSpeed'],
-    type: AlertType.values[json['type']],
+    type: _alertTypeFrom(json['type']),
   );
+
+  /// Accepts both the current name form and the legacy index form.
+  static AlertType _alertTypeFrom(Object? raw) {
+    if (raw is int) {
+      return raw >= 0 && raw < AlertType.values.length
+          ? AlertType.values[raw]
+          : AlertType.overSpeed;
+    }
+    return AlertType.values.firstWhere(
+      (v) => v.name == raw,
+      orElse: () => AlertType.overSpeed,
+    );
+  }
 }
 
 enum AlertType { overSpeed, harshBrake, rapidAcceleration, fatigueWarning }
@@ -184,6 +256,19 @@ class DrivingScore {
     return 'Poor driving';
   }
 
+  /// How many recent trips the score reflects.
+  static const int windowSize = 10;
+
+  /// Scores the most recent [windowSize] trips, averaging per trip.
+  ///
+  /// This used to sum `overSpeedCount` and `alerts.length` across *every trip
+  /// ever* and subtract the clamped total. Because the penalties clamped at 50
+  /// and 40, roughly ten lifetime over-speed episodes pinned the score at its
+  /// floor permanently: it decayed monotonically and no amount of good driving
+  /// afterwards could move it, which makes it useless as feedback.
+  ///
+  /// Now each trip is scored on its own and the window is averaged, so
+  /// improving actually shows up.
   static DrivingScore calculate(List<TripData> trips) {
     if (trips.isEmpty) {
       return const DrivingScore(
@@ -194,29 +279,57 @@ class DrivingScore {
       );
     }
 
-    int totalOverSpeed = 0;
-    int totalAlerts = 0;
-    for (final trip in trips) {
-      totalOverSpeed += trip.overSpeedCount;
-      totalAlerts += trip.alerts.length;
+    // Most recent first, then take the window.
+    final ordered = List<TripData>.from(trips)
+      ..sort((a, b) => b.startTime.compareTo(a.startTime));
+    final window = ordered.take(windowSize).toList();
+
+    var complianceSum = 0;
+    var smoothnessSum = 0;
+    var attentionSum = 0;
+
+    for (final trip in window) {
+      complianceSum += forTrip(trip).speedCompliance;
+      smoothnessSum += forTrip(trip).smoothness;
+      attentionSum += forTrip(trip).attention;
     }
 
-    int speedCompliance = 100 - (totalOverSpeed * 5).clamp(0, 50);
-    int smoothness = 100 - (totalAlerts * 3).clamp(0, 40);
-    int attention =
-        (trips.any((t) => t.duration != null && t.duration!.inHours > 2)
-            ? 70
-            : 90);
+    final count = window.length;
+    return _compose(
+      speedCompliance: (complianceSum / count).round(),
+      smoothness: (smoothnessSum / count).round(),
+      attention: (attentionSum / count).round(),
+    );
+  }
 
-    int overall =
+  /// Scores a single trip, so one bad drive stays one bad drive.
+  static DrivingScore forTrip(TripData trip) {
+    final speedCompliance = 100 - (trip.overSpeedCount * 5).clamp(0, 60);
+    final smoothness = 100 - (trip.alerts.length * 3).clamp(0, 50);
+    final attention =
+        (trip.duration != null && trip.duration!.inHours > 2) ? 70 : 90;
+
+    return _compose(
+      speedCompliance: speedCompliance,
+      smoothness: smoothness,
+      attention: attention,
+    );
+  }
+
+  static DrivingScore _compose({
+    required int speedCompliance,
+    required int smoothness,
+    required int attention,
+  }) {
+    final overall =
         ((speedCompliance * 0.4) + (smoothness * 0.4) + (attention * 0.2))
             .round();
 
     return DrivingScore(
       overall: overall.clamp(0, 100),
-      speedCompliance: speedCompliance,
-      smoothness: smoothness,
-      attention: attention,
+      speedCompliance: speedCompliance.clamp(0, 100),
+      smoothness: smoothness.clamp(0, 100),
+      attention: attention.clamp(0, 100),
     );
   }
 }

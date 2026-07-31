@@ -1,6 +1,5 @@
 import 'package:flutter/foundation.dart';
 
-import '../data/roads.dart';
 import '../data/speed_zones.dart';
 import '../models/speed_calculator.dart'
     show VisibilityLevel, WeatherCondition;
@@ -9,6 +8,7 @@ import '../models/speed_model/solar_position.dart';
 import '../models/speed_model/speed_advisor.dart';
 import '../models/speed_model/speed_recommendation.dart';
 import 'location_speed_service.dart';
+import 'road_database.dart';
 
 /// Assembles the inputs the speed model needs and exposes the current
 /// recommendation.
@@ -49,7 +49,12 @@ class SpeedService extends ChangeNotifier {
       _locationSpeedService.status == LocationSpeedStatus.inZone;
 
   void _initializeLocationService() {
-    _locationSpeedService.initialize(mbararaSpeedZones, mbararaRoads);
+    // Curated zones only. The three hand-typed road segments that used to be
+    // passed here are superseded by the OSM database — one of them
+    // approximated ~90 km of highway with four waypoints, and none carried any
+    // provenance. Curated *zones* stay: they cover specific school gates and
+    // hospital entrances that OSM does not tag.
+    _locationSpeedService.initialize(mbararaSpeedZones, const []);
     _locationServiceInitialized = true;
   }
 
@@ -63,19 +68,41 @@ class SpeedService extends ChangeNotifier {
       weather: _weather,
       daylight: _daylight,
       cameraVisibility: _cameraVisibility,
-      // isLit stays null until the OSM `lit` tag is available.
+      // From the OSM `lit` tag where the way carries one. Only ~0.8% of ways
+      // in the shipped extract do, so this is usually still null and the
+      // sight-distance model keeps its unknown-lighting fallback.
+      isLit: location.isLit,
     );
   }
+
+  /// OSM `surface` for the matched road, when surveyed. ~14.4% of ways in the
+  /// extract carry it, and most of those are `unpaved`.
+  String? get roadSurface => locationResult.surface;
+
+  /// Identifier of the matched road in the offline database, for the trip
+  /// record. Null when the fix is not on a mapped road.
+  int? get roadId => locationResult.roadId;
 
   SpeedRecommendation get recommendation => SpeedAdvisor.evaluate(conditions);
 
   /// [speedKph] lets the zone matcher size its approach ring by how fast the
   /// driver is closing, rather than by how big the zone happens to be.
-  void updatePosition(double lat, double lon, {double speedKph = 0}) {
+  Future<void> updatePosition(
+    double lat,
+    double lon, {
+    double speedKph = 0,
+  }) async {
     _latitude = lat;
     _longitude = lon;
-    _locationSpeedService.updatePosition(lat, lon, speedKph: speedKph);
     _refreshDaylight();
+    notifyListeners();
+    await _locationSpeedService.updatePosition(lat, lon, speedKph: speedKph);
+    notifyListeners();
+  }
+
+  /// Makes the offline road database available to the matcher.
+  void attachRoadDatabase(RoadDatabase database) {
+    _locationSpeedService.attachRoadDatabase(database);
     notifyListeners();
   }
 

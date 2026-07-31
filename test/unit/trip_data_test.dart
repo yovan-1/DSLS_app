@@ -122,7 +122,9 @@ void main() {
       final json = trip.toJson();
 
       expect(json['id'], 'test-1');
-      expect(json['location'], LocationType.highway.index);
+      // By name, not index: LocationType has already grown from six values to
+      // eight, and index-based storage only survived that by luck.
+      expect(json['location'], 'highway');
       expect(json['baseSpeedLimit'], 100);
       expect(json['recommendedSpeed'], 80);
       expect(json['maxSpeed'], 90);
@@ -217,7 +219,7 @@ void main() {
 
       expect(json['id'], 'alert-1');
       expect(json['speed'], 70);
-      expect(json['type'], AlertType.overSpeed.index);
+      expect(json['type'], 'overSpeed');
     });
 
     test('fromJson should deserialize', () {
@@ -283,6 +285,74 @@ void main() {
       expect(score.overall, greaterThan(0));
       expect(score.speedCompliance, greaterThan(0));
       expect(score.smoothness, greaterThan(0));
+    });
+
+    /// The behaviour that made the score useless as feedback. It summed
+    /// `overSpeedCount` across every trip ever and subtracted the clamped
+    /// total, so after roughly ten lifetime over-speed episodes the score sat
+    /// at its floor permanently — it could only ever decay.
+    test('recovers after a bad trip is followed by good ones', () {
+      TripData drive(String id, DateTime start, int overSpeeds) => TripData(
+            id: id,
+            startTime: start,
+            endTime: start.add(const Duration(minutes: 30)),
+            location: LocationType.urban,
+            baseSpeedLimit: 60,
+            recommendedSpeed: 50,
+            overSpeedCount: overSpeeds,
+          );
+
+      final terrible = [drive('bad', DateTime(2026, 1, 1), 40)];
+      final afterBad = DrivingScore.calculate(terrible).overall;
+
+      // Ten clean drives after it.
+      final recovered = [
+        ...terrible,
+        for (var i = 1; i <= 10; i++)
+          drive('good$i', DateTime(2026, 1, 1 + i), 0),
+      ];
+      final afterGood = DrivingScore.calculate(recovered).overall;
+
+      expect(afterGood, greaterThan(afterBad),
+          reason: 'good driving must be able to move the score back up');
+    });
+
+    test('scores a window of recent trips, not all history', () {
+      TripData drive(String id, DateTime start, int overSpeeds) => TripData(
+            id: id,
+            startTime: start,
+            endTime: start.add(const Duration(minutes: 30)),
+            location: LocationType.urban,
+            baseSpeedLimit: 60,
+            recommendedSpeed: 50,
+            overSpeedCount: overSpeeds,
+          );
+
+      // One ancient disaster, then a full window of clean drives.
+      final trips = [
+        drive('ancient', DateTime(2020, 1, 1), 100),
+        for (var i = 1; i <= DrivingScore.windowSize; i++)
+          drive('recent$i', DateTime(2026, 1, i), 0),
+      ];
+
+      final score = DrivingScore.calculate(trips);
+
+      expect(score.speedCompliance, 100,
+          reason: 'a drive from 2020 should not still be scoring the driver');
+    });
+
+    test('scores a single trip on its own merits', () {
+      final clean = TripData(
+        id: 'clean',
+        startTime: DateTime(2026, 1, 1),
+        endTime: DateTime(2026, 1, 1, 0, 30),
+        location: LocationType.urban,
+        baseSpeedLimit: 60,
+        recommendedSpeed: 50,
+      );
+
+      expect(DrivingScore.forTrip(clean).speedCompliance, 100);
+      expect(DrivingScore.forTrip(clean).overall, greaterThan(90));
     });
 
     test('grade should return correct grade', () {

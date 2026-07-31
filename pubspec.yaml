@@ -36,6 +36,7 @@ dev_dependencies:
   mocktail: ^1.0.4
   flutter_launcher_icons: ^0.13.1
   flutter_lints: ^5.0.0
+  sqflite_common_ffi: ^2.4.0+3
 flutter_launcher_icons:
   android: true
   ios: false
@@ -45,3 +46,8 @@ flutter:
   assets:
     - assets/images/ikayo.png
     - assets/sounds/
+    # Offline road database, built by tools/build_road_db.py from OpenStreetMap.
+    # The app never queries a map service at runtime — a driving app must not
+    # depend on the network for its speed ceiling.
+    - assets/roads.db
+    - assets/roads.db.version

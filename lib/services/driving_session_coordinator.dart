@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:geolocator/geolocator.dart';
 
 import '../models/speed_calculator.dart' show SpeedCalculator;
 import '../models/speed_model/road_conditions.dart';
@@ -177,6 +178,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _startedAt = DateTime.now();
     _lastFixAt = null;
     _lastRecordAt = null;
+    _lastDistancePosition = null;
     _wasOverSpeed = false;
 
     _alerts.resetAlertState();
@@ -236,6 +238,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _speed.updateVisibility(null);
     _startedAt = null;
     _lastFixAt = null;
+    _lastDistancePosition = null;
     _wasOverSpeed = false;
 
     _safeNotify();
@@ -303,6 +306,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     if (position == null) return;
 
     _lastFixAt = update.timestamp;
+    _accumulateDistance(position);
 
     // Correct the integrator against this fix, so dead-reckoning drift is
     // bounded by the GPS interval rather than by the length of the trip. This
@@ -394,12 +398,47 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     if (last != null && now.difference(last) < recordInterval) return;
     _lastRecordAt = now;
 
+    final location = _speed.locationResult;
     _trips.addRecord(
       speed: speed,
       recommendedSpeed: recommendation.recommendedSpeedKph,
       riskBand: recommendation.riskBand,
+      // Where the driving happened, not just how fast. These reached the trip
+      // record as nulls for the whole life of the app.
+      roadId: location.roadId,
+      actualSpeedLimit: location.limitSource == LimitSource.posted
+          ? location.speedLimit
+          : null,
+      surface: location.surface,
     );
   }
+
+  /// Accumulates the distance actually driven, fix by fix.
+  ///
+  /// The trip used to report `duration x avgSpeed`, which counts time spent
+  /// stationary at junctions as distance covered. Integrating the fixes
+  /// measures the route instead of estimating it.
+  void _accumulateDistance(Position position) {
+    final previous = _lastDistancePosition;
+    _lastDistancePosition = position;
+    if (previous == null) return;
+
+    final metres = Geolocator.distanceBetween(
+      previous.latitude,
+      previous.longitude,
+      position.latitude,
+      position.longitude,
+    );
+
+    // A jump this large between one-second fixes is GPS noise, not travel.
+    if (metres > _maxPlausibleLegMetres) return;
+    _trips.addDistance(metres);
+  }
+
+  /// 300 km/h for a second — beyond that the fix is wrong, not the vehicle.
+  static const double _maxPlausibleLegMetres = 85;
+
+  Position? _lastDistancePosition;
 
   /// Ticks the UI and lets it notice a stale fix. Deliberately does no driving
   /// logic — that is what made the old 500 ms timer the event source.
