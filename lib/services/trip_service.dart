@@ -238,7 +238,16 @@ class TripService extends ChangeNotifier {
     final alerts = List<SpeedAlert>.from(_currentTrip!.alerts);
     var overSpeedCount = _currentTrip!.overSpeedCount;
 
-    if (isOverSpeed) {
+    // Count over-speed *episodes*, not samples. This used to fire on every
+    // record, so a single 10-second overspeed was logged as one alert per
+    // sampling tick — making the count a function of the recording rate rather
+    // than of how the trip was actually driven. Only the rising edge counts;
+    // `_drivingRecords.last` is the record just added, so the one before it is
+    // the previous state.
+    final wasOverSpeed = _drivingRecords.length >= 2 &&
+        _drivingRecords[_drivingRecords.length - 2].isOverSpeed;
+
+    if (isOverSpeed && !wasOverSpeed) {
       overSpeedCount++;
       alerts.add(
         SpeedAlert(

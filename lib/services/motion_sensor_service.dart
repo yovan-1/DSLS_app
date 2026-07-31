@@ -235,6 +235,20 @@ class MotionSensorService extends ChangeNotifier {
     return (accelMagnitude / _gravityMagnitude + gyroMagnitude) / 2.0;
   }
 
+  /// Releases the sensor subscriptions without disposing the service, so a
+  /// later trip can call [initialize] again. Previously only [dispose] cancelled
+  /// them, which meant the accelerometer kept streaming after a trip ended.
+  void stop() {
+    _accelSubscription?.cancel();
+    _accelSubscription = null;
+    _gyroSubscription?.cancel();
+    _gyroSubscription = null;
+    _isInitialized = false;
+    _speedEstimateMps = 0;
+    _lastUpdate = null;
+    notifyListeners();
+  }
+
   @override
   void dispose() {
     _accelSubscription?.cancel();

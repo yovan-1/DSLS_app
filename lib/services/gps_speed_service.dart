@@ -41,12 +41,20 @@ class SpeedUpdate {
   final RiskData? riskData;
   final DateTime timestamp;
 
+  /// The fix this update was derived from, when there was one.
+  ///
+  /// Null on the synthetic update emitted by [GpsSpeedService.stopTracking].
+  /// Consumers driving off this stream need the position to do zone matching,
+  /// so carrying it here avoids a second stream and keeps the two in step.
+  final Position? position;
+
   SpeedUpdate({
     required this.rawGpsSpeed,
     required this.smoothedSpeed,
     this.fusedSpeed = 0,
     this.riskData,
     required this.timestamp,
+    this.position,
   });
 }
 
@@ -338,6 +346,7 @@ class GpsSpeedService extends ChangeNotifier {
         fusedSpeed: _fusedSpeed,
         riskData: _cachedRiskData,
         timestamp: now,
+        position: position,
       ),
     );
     notifyListeners();

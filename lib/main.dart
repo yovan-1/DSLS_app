@@ -7,7 +7,7 @@ import 'services/trip_service.dart';
 import 'services/speed_service.dart';
 import 'services/alert_service.dart';
 import 'services/gps_speed_service.dart';
-import 'services/auto_parameters_service.dart';
+import 'services/driving_session_coordinator.dart';
 import 'services/visibility_service.dart';
 import 'services/offline_storage_service.dart';
 import 'services/motion_sensor_service.dart';
@@ -53,6 +53,24 @@ void main() async {
     tripService.setSettingsService(settingsService);
     await tripService.loadTrips();
 
+    // Built here rather than with lazy `create:` providers so that construction
+    // order is explicit and the coordinator can hold direct references — its
+    // lifetime has to be independent of any widget, since the whole point is
+    // that a drive survives the screen going away.
+    final speedService = SpeedService();
+    final gpsService = GpsSpeedService();
+    final visibilityService = VisibilityService();
+    final motionService = MotionSensorService();
+
+    final sessionCoordinator = DrivingSessionCoordinator(
+      gps: gpsService,
+      speed: speedService,
+      trips: tripService,
+      alerts: alertService,
+      visibility: visibilityService,
+      motion: motionService,
+    );
+
     runApp(
       MultiProvider(
         providers: [
@@ -60,11 +78,11 @@ void main() async {
           ChangeNotifierProvider.value(value: tripService),
           ChangeNotifierProvider.value(value: cloudUploadService),
           ChangeNotifierProvider.value(value: alertService),
-          ChangeNotifierProvider(create: (_) => SpeedService()),
-          ChangeNotifierProvider(create: (_) => GpsSpeedService()),
-          ChangeNotifierProvider(create: (_) => AutoParametersService()),
-          ChangeNotifierProvider(create: (_) => VisibilityService()),
-          ChangeNotifierProvider(create: (_) => MotionSensorService()),
+          ChangeNotifierProvider.value(value: speedService),
+          ChangeNotifierProvider.value(value: gpsService),
+          ChangeNotifierProvider.value(value: visibilityService),
+          ChangeNotifierProvider.value(value: motionService),
+          ChangeNotifierProvider.value(value: sessionCoordinator),
         ],
         child: const MyApp(),
       ),
