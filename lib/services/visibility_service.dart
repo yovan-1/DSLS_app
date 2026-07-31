@@ -6,13 +6,35 @@ import 'package:image/image.dart' as img;
 import 'package:permission_handler/permission_handler.dart';
 import '../models/speed_calculator.dart';
 
+/// Measures ambient light through the rear camera.
+///
+/// Two things changed here from the original. First, camera- and
+/// weather-derived visibility are kept as separate fields. They used to share
+/// one, so every camera sample — every 5 to 30 seconds — silently erased the
+/// weather degradation, which was only recomputed on a weather fetch every 30
+/// minutes. In practice the weather penalty was almost never in effect.
+///
+/// Second, "the camera cannot see" is now represented as null rather than as
+/// [VisibilityLevel.veryPoor]. A phone in a pocket, a backgrounded app and a
+/// genuinely dark road are three different situations, and only the last one
+/// should slow the driver down. The speed model already treats a null camera
+/// reading as "unknown" and falls back to solar elevation plus weather, which
+/// works in a pocket.
 class VisibilityService extends ChangeNotifier {
   CameraController? _cameraController;
   bool _isInitialized = false;
   bool _permissionDenied = false;
+  bool _suspended = false;
   double _ambientBrightness = 128;
-  VisibilityLevel _visibilityLevel = VisibilityLevel.good;
-  VisibilityLevel _cameraVisibilityLevel = VisibilityLevel.good;
+
+  /// Measured ambient light, or null when the camera cannot see: not yet
+  /// started, released while backgrounded, or reading pocket-dark while moving.
+  VisibilityLevel? _cameraVisibility;
+
+  /// The visibility ceiling implied by the weather alone. Null until a weather
+  /// reading arrives.
+  VisibilityLevel? _weatherVisibility;
+
   Timer? _brightnessTimer;
   List<CameraDescription>? _cameras;
 
@@ -20,22 +42,55 @@ class VisibilityService extends ChangeNotifier {
   static const int _maxIntervalSeconds = 30;
   static const double _stabilityThreshold = 0.10;
 
+  /// Below this the sensor is seeing essentially nothing. Combined with the
+  /// vehicle moving, that is a covered lens rather than a dark road — no real
+  /// windscreen view is this black even at night, because of headlights.
+  static const double pocketBrightnessThreshold = 8.0;
+
+  /// Consecutive pocket-dark samples before believing it. One frame can be a
+  /// hand passing over the lens.
+  static const int pocketSampleCount = 2;
+
+  /// Below this the vehicle is not really moving, so a dark lens says nothing.
+  static const int pocketMinSpeedKph = 20;
+
   final List<double> _brightnessHistory = [];
   static const int _historySize = 5;
   int _currentIntervalSeconds = _minIntervalSeconds;
   bool _isStable = true;
   bool _isDisposed = false;
+  int _consecutiveDarkSamples = 0;
+  int _vehicleSpeedKph = 0;
 
   double get ambientBrightness => _ambientBrightness;
   bool get isInitialized => _isInitialized;
   bool get permissionDenied => _permissionDenied;
-  VisibilityLevel get visibilityLevel => _visibilityLevel;
-  VisibilityLevel get cameraVisibilityLevel => _cameraVisibilityLevel;
+  bool get isSuspended => _suspended;
   bool get isAvailable => _isInitialized && !_permissionDenied;
+  bool get isStable => _isStable;
+
+  /// Measured ambient light. Null means the camera cannot see — feed this
+  /// straight to the speed model, which handles the unknown case.
+  VisibilityLevel? get cameraVisibility => _cameraVisibility;
+
+  VisibilityLevel? get weatherVisibility => _weatherVisibility;
+
+  /// The worse of the camera and weather assessments, for display. Null when
+  /// neither is known.
+  VisibilityLevel? get effectiveVisibility {
+    final camera = _cameraVisibility;
+    final weather = _weatherVisibility;
+    if (camera == null) return weather;
+    if (weather == null) return camera;
+    // VisibilityLevel is ordered best to worst, so the higher index is worse.
+    return camera.index >= weather.index ? camera : weather;
+  }
 
   Future<void> initialize() async {
     if (_isDisposed) return;
     if (_isInitialized || _permissionDenied) return;
+
+    _suspended = false;
 
     try {
       var status = await Permission.camera.request();
@@ -65,7 +120,6 @@ class VisibilityService extends ChangeNotifier {
 
       await _cameraController!.initialize();
       _isInitialized = true;
-      _updateVisibilityFromTime();
       notifyListeners();
       _startBrightnessMonitoring();
     } catch (e) {
@@ -73,24 +127,48 @@ class VisibilityService extends ChangeNotifier {
     }
   }
 
+  /// Tells the service how fast the vehicle is going, so it can tell a pocketed
+  /// phone from a dark road.
+  void updateVehicleSpeed(int speedKph) {
+    _vehicleSpeedKph = speedKph;
+  }
+
+  /// Releases the camera when the app is backgrounded. Android revokes it
+  /// anyway; the point is to stop reporting the last thing the lens saw as if
+  /// it were current.
+  Future<void> suspend() async {
+    if (_suspended) return;
+    _suspended = true;
+    await _releaseCamera();
+    _setCameraVisibility(null);
+  }
+
+  /// Re-acquires the camera after the app returns to the foreground.
+  Future<void> resume() async {
+    if (!_suspended) return;
+    _suspended = false;
+    await initialize();
+  }
+
   void _startBrightnessMonitoring() {
     _currentIntervalSeconds = _minIntervalSeconds;
     _isStable = true;
     _brightnessHistory.clear();
+    _consecutiveDarkSamples = 0;
     _scheduleNextCheck();
   }
 
   void _scheduleNextCheck() {
-    if (_isDisposed) return;
+    if (_isDisposed || _suspended) return;
     _brightnessTimer?.cancel();
     _brightnessTimer = Timer(Duration(seconds: _currentIntervalSeconds), () {
-      if (_isDisposed) return;
+      if (_isDisposed || _suspended) return;
       _captureAndProcessBrightness();
     });
   }
 
   Future<void> _captureAndProcessBrightness() async {
-    if (_isDisposed) return;
+    if (_isDisposed || _suspended) return;
     if (_cameraController == null || !_cameraController!.value.isInitialized) {
       _scheduleNextCheck();
       return;
@@ -101,31 +179,54 @@ class VisibilityService extends ChangeNotifier {
       final brightness = await _calculateBrightness(image.path);
       if (_isDisposed) return;
 
-      final cameraLevel = _mapBrightnessToVisibility(brightness);
-      final hasChanged = brightness != _ambientBrightness ||
-          cameraLevel != _cameraVisibilityLevel ||
-          cameraLevel != _visibilityLevel;
-
-      _updateBrightnessHistory(brightness);
-      _updateStabilityStatus();
-
-      _ambientBrightness = brightness;
-      _cameraVisibilityLevel = cameraLevel;
-      _visibilityLevel = cameraLevel;
+      ingestBrightness(brightness);
 
       try {
         await File(image.path).delete();
       } catch (_) {}
-
-      if (hasChanged) {
-        notifyListeners();
-      }
 
       _scheduleNextCheck();
     } catch (e) {
       debugPrint("Error calculating brightness: $e");
       _scheduleNextCheck();
     }
+  }
+
+  /// Applies one brightness reading. Separated from the camera capture so the
+  /// decision — which is where the interesting behaviour is — can be exercised
+  /// without a device.
+  @visibleForTesting
+  void ingestBrightness(double brightness) {
+    _updateBrightnessHistory(brightness);
+    _updateStabilityStatus();
+    _ambientBrightness = brightness;
+    _setCameraVisibility(_assessBrightness(brightness));
+  }
+
+  /// Maps a brightness reading to a visibility level, or to null when the
+  /// reading means the lens is covered rather than the road is dark.
+  VisibilityLevel? _assessBrightness(double brightness) {
+    if (brightness < pocketBrightnessThreshold) {
+      _consecutiveDarkSamples++;
+    } else {
+      _consecutiveDarkSamples = 0;
+    }
+
+    final looksPocketed = _consecutiveDarkSamples >= pocketSampleCount &&
+        _vehicleSpeedKph >= pocketMinSpeedKph;
+
+    // A phone face-down in a bag on a motorway is not a reason to recommend
+    // 20 km/h. Report that the camera has nothing to say and let the model fall
+    // back to solar elevation and weather.
+    if (looksPocketed) return null;
+
+    return _mapBrightnessToVisibility(brightness);
+  }
+
+  void _setCameraVisibility(VisibilityLevel? level) {
+    if (_cameraVisibility == level) return;
+    _cameraVisibility = level;
+    if (!_isDisposed) notifyListeners();
   }
 
   void _updateBrightnessHistory(double brightness) {
@@ -144,7 +245,13 @@ class VisibilityService extends ChangeNotifier {
 
     final recent = _brightnessHistory.sublist(_brightnessHistory.length - 3);
     final avg = recent.reduce((a, b) => a + b) / recent.length;
-    final variance = recent.map((b) => (b - avg).abs() / avg).reduce((a, b) => a + b) / recent.length;
+    if (avg == 0) {
+      _isStable = true;
+      return;
+    }
+    final variance =
+        recent.map((b) => (b - avg).abs() / avg).reduce((a, b) => a + b) /
+            recent.length;
 
     _isStable = variance < _stabilityThreshold;
 
@@ -197,67 +304,33 @@ class VisibilityService extends ChangeNotifier {
     }
   }
 
-  void _updateVisibilityFromTime() {
-    _visibilityLevel = _timeBasedVisibility();
-  }
-
-  VisibilityLevel _timeBasedVisibility() {
-    final hour = DateTime.now().hour;
-    if (hour >= 6 && hour < 18) return VisibilityLevel.good;
-    if (hour >= 18 && hour < 20) return VisibilityLevel.moderate;
-    return VisibilityLevel.poor;
-  }
-
-  VisibilityLevel _baseVisibility() {
-    if (_isInitialized && !_permissionDenied) {
-      return _cameraVisibilityLevel;
-    }
-    return _timeBasedVisibility();
-  }
-
+  /// Records the visibility ceiling the weather implies, independently of what
+  /// the camera sees. Kept separate so a camera sample can no longer erase it.
   void updateVisibilityFromWeather(WeatherCondition weather) {
-    final base = _baseVisibility();
+    final assessed = switch (weather) {
+      WeatherCondition.clear ||
+      WeatherCondition.cloudy =>
+        VisibilityLevel.excellent,
+      WeatherCondition.rain => VisibilityLevel.good,
+      WeatherCondition.heavyRain ||
+      WeatherCondition.fog ||
+      WeatherCondition.smoke ||
+      WeatherCondition.haze ||
+      WeatherCondition.snow ||
+      WeatherCondition.freezingRain ||
+      WeatherCondition.sleet ||
+      WeatherCondition.hail ||
+      WeatherCondition.dust ||
+      WeatherCondition.storm =>
+        VisibilityLevel.moderate,
+    };
 
-    switch (weather) {
-      case WeatherCondition.rain:
-        _visibilityLevel = _lowerVisibility(base, 1);
-        break;
-      case WeatherCondition.heavyRain:
-      case WeatherCondition.fog:
-      case WeatherCondition.smoke:
-      case WeatherCondition.haze:
-      case WeatherCondition.snow:
-      case WeatherCondition.freezingRain:
-      case WeatherCondition.sleet:
-      case WeatherCondition.hail:
-      case WeatherCondition.dust:
-      case WeatherCondition.storm:
-        _visibilityLevel = _lowerVisibility(base, 2);
-        break;
-      case WeatherCondition.clear:
-      case WeatherCondition.cloudy:
-        _visibilityLevel = base;
-        break;
-    }
-    notifyListeners();
+    if (_weatherVisibility == assessed) return;
+    _weatherVisibility = assessed;
+    if (!_isDisposed) notifyListeners();
   }
 
-  void updateFromCameraOverride() {
-    if (_cameraVisibilityLevel == VisibilityLevel.poor ||
-        _cameraVisibilityLevel == VisibilityLevel.veryPoor) {
-      _visibilityLevel = _cameraVisibilityLevel;
-      notifyListeners();
-    }
-  }
-
-  VisibilityLevel _lowerVisibility(VisibilityLevel level, int steps) {
-    final values = VisibilityLevel.values;
-    final currentIndex = level.index;
-    final newIndex = (currentIndex + steps).clamp(0, values.length - 1);
-    return values[newIndex];
-  }
-
-  Future<void> stop() async {
+  Future<void> _releaseCamera() async {
     _brightnessTimer?.cancel();
     _brightnessTimer = null;
     final controller = _cameraController;
@@ -268,6 +341,14 @@ class VisibilityService extends ChangeNotifier {
     } catch (e) {
       debugPrint('[VisibilityService] Error disposing camera: $e');
     }
+  }
+
+  Future<void> stop() async {
+    await _releaseCamera();
+    _suspended = false;
+    _consecutiveDarkSamples = 0;
+    _vehicleSpeedKph = 0;
+    _setCameraVisibility(null);
     if (!_isDisposed) notifyListeners();
   }
 

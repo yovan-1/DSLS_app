@@ -118,6 +118,7 @@ class RefusingGpsService extends FakeGpsService {
 class FakeSpeedService extends SpeedService {
   LocationSpeedResult scriptedLocation = LocationSpeedResult.defaultResult;
   int updatePositionCalls = 0;
+  VisibilityLevel? camera;
 
   @override
   LocationSpeedResult get locationResult => scriptedLocation;
@@ -129,6 +130,7 @@ class FakeSpeedService extends SpeedService {
         roadClass: scriptedLocation.locationType,
         weather: WeatherCondition.clear,
         daylight: DaylightState.daylight,
+        cameraVisibility: camera,
       );
 
   @override
@@ -140,7 +142,9 @@ class FakeSpeedService extends SpeedService {
   void updateWeather(WeatherCondition weather) {}
 
   @override
-  void updateVisibility(VisibilityLevel? visibility) {}
+  void updateVisibility(VisibilityLevel? visibility) {
+    camera = visibility;
+  }
 }
 
 class RecordingAlertService extends SpeedAlertService {
@@ -169,11 +173,31 @@ class RecordingAlertService extends SpeedAlertService {
 }
 
 class StubVisibilityService extends VisibilityService {
+  bool suspended = false;
+  bool resumed = false;
+  int lastReportedSpeed = 0;
+
   @override
   Future<void> initialize() async {}
 
   @override
   Future<void> stop() async {}
+
+  @override
+  Future<void> suspend() async {
+    suspended = true;
+  }
+
+  @override
+  Future<void> resume() async {
+    resumed = true;
+    suspended = false;
+  }
+
+  @override
+  void updateVehicleSpeed(int speedKph) {
+    lastReportedSpeed = speedKph;
+  }
 
   @override
   void updateVisibilityFromWeather(WeatherCondition weather) {}
@@ -222,6 +246,7 @@ void main() {
   late FakeSpeedService speed;
   late TripService trips;
   late RecordingAlertService alerts;
+  late StubVisibilityService visibility;
   late DrivingSessionCoordinator coordinator;
 
   setUp(() {
@@ -229,12 +254,13 @@ void main() {
     speed = FakeSpeedService();
     trips = TripService();
     alerts = RecordingAlertService();
+    visibility = StubVisibilityService();
     coordinator = DrivingSessionCoordinator(
       gps: gps,
       speed: speed,
       trips: trips,
       alerts: alerts,
-      visibility: StubVisibilityService(),
+      visibility: visibility,
       motion: StubMotionService(),
       weather: StubWeatherService(),
     );
@@ -436,6 +462,50 @@ void main() {
 
       expect(weather.calls, 1);
       await c.stop();
+    });
+  });
+
+  group('app lifecycle', () {
+    test('backgrounding releases the camera and blanks the reading', () async {
+      await coordinator.start();
+      gps.emit(0.6, 30.6, 90);
+      await settle();
+
+      // The camera had a reading before the app went away.
+      speed.updateVisibility(VisibilityLevel.veryPoor);
+      expect(coordinator.state.conditions.cameraVisibility,
+          VisibilityLevel.veryPoor);
+
+      await coordinator.onAppPaused();
+
+      expect(visibility.suspended, isTrue,
+          reason: 'a pocketed phone cannot measure ambient light');
+      expect(coordinator.state.conditions.cameraVisibility, isNull,
+          reason: 'better unknown than a stale reading presented as current');
+    });
+
+    test('returning to the foreground re-acquires the camera', () async {
+      await coordinator.start();
+      await coordinator.onAppPaused();
+
+      await coordinator.onAppResumed();
+
+      expect(visibility.resumed, isTrue);
+    });
+
+    test('lifecycle events do nothing when no drive is running', () async {
+      await coordinator.onAppPaused();
+
+      expect(visibility.suspended, isFalse);
+    });
+
+    test('the vehicle speed reaches the pocket detector', () async {
+      await coordinator.start();
+
+      gps.emit(0.6, 30.6, 95);
+      await settle();
+
+      expect(visibility.lastReportedSpeed, 95);
     });
   });
 

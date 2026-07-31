@@ -198,6 +198,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     // The screen used to cancel only its own timer, leaving GPS, camera and
     // sensors running. One owner, one teardown.
     await _gps.stopTracking();
+    _visibility.removeListener(_syncVisibility);
     await _visibility.stop();
     _motion.stop();
     await _trips.endTrip();
@@ -210,11 +211,39 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _safeNotify();
   }
 
+  /// The app went to the background. The camera is about to be revoked, and a
+  /// phone in a pocket cannot measure ambient light — so stop presenting the
+  /// last thing the lens saw as if it were current. The speed model falls back
+  /// to solar elevation and weather, which works in a pocket.
+  Future<void> onAppPaused() async {
+    if (!_isActive) return;
+    await _visibility.suspend();
+    _speed.updateVisibility(null);
+    _gps.setRoadConditions(_speed.conditions);
+    _safeNotify();
+  }
+
+  /// Back in the foreground: re-acquire the camera if a drive is still running.
+  Future<void> onAppResumed() async {
+    if (!_isActive) return;
+    await _visibility.resume();
+    _syncVisibility();
+  }
+
   Future<void> _initVisibility() async {
     await _visibility.initialize();
     if (_disposed || !_isActive) return;
-    if (!_visibility.isInitialized) return;
-    _speed.updateVisibility(_visibility.visibilityLevel);
+    _visibility.addListener(_syncVisibility);
+    _syncVisibility();
+  }
+
+  /// Pushes the camera's assessment into the model. Deliberately the
+  /// camera-only value: [VisibilityService.effectiveVisibility] folds in
+  /// weather, and the model already applies weather itself, so passing the
+  /// combined value would count it twice.
+  void _syncVisibility() {
+    if (_disposed || !_isActive) return;
+    _speed.updateVisibility(_visibility.cameraVisibility);
     _gps.setRoadConditions(_speed.conditions);
     _safeNotify();
   }
@@ -243,6 +272,11 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     _gps.setRoadConditions(_speed.conditions);
 
     final speed = _currentSpeedKph;
+
+    // Lets the camera tell a covered lens from a dark road: pitch black at
+    // motorway speed is a phone in a bag, not a tunnel.
+    _visibility.updateVehicleSpeed(speed);
+
     final risk = _gps.cachedRiskData;
     final recommendation =
         risk?.recommendation ?? SpeedAdvisor.evaluate(_speed.conditions);
