@@ -11,6 +11,17 @@ class OfflineStorageService {
   static const String _keyLastLocation = 'last_location';
   static const String _keyUserPreferences = 'user_preferences';
 
+  /// Everything this service owns. `last_location` is stored as two doubles
+  /// under suffixed keys, so both are listed.
+  static const List<String> _ownedKeys = [
+    _keyWeatherData,
+    _keyWeatherConfig,
+    _keyTripData,
+    '${_keyLastLocation}_lat',
+    '${_keyLastLocation}_lon',
+    _keyUserPreferences,
+  ];
+
   SharedPreferences? _prefs;
 
   Future<void> init() async {
@@ -123,10 +134,18 @@ class OfflineStorageService {
     }
   }
 
+  /// Clears only this service's keys.
+  ///
+  /// This used to call `_prefs.clear()`, which wipes *every* preference in the
+  /// app — alert settings, the first-launch flag, the wakelock preference and
+  /// the auto-upload flag included. Clearing offline caches should not log the
+  /// user back through the first-run disclaimer.
   Future<void> clearAll() async {
     try {
-      await _prefs?.clear();
-      debugPrint('[OfflineStorage] All data cleared');
+      for (final key in _ownedKeys) {
+        await _prefs?.remove(key);
+      }
+      debugPrint('[OfflineStorage] Offline data cleared');
     } catch (e) {
       debugPrint('[OfflineStorage] Error clearing: $e');
     }

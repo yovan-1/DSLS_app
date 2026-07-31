@@ -69,10 +69,12 @@ class SpeedService extends ChangeNotifier {
 
   SpeedRecommendation get recommendation => SpeedAdvisor.evaluate(conditions);
 
-  void updatePosition(double lat, double lon) {
+  /// [speedKph] lets the zone matcher size its approach ring by how fast the
+  /// driver is closing, rather than by how big the zone happens to be.
+  void updatePosition(double lat, double lon, {double speedKph = 0}) {
     _latitude = lat;
     _longitude = lon;
-    _locationSpeedService.updatePosition(lat, lon);
+    _locationSpeedService.updatePosition(lat, lon, speedKph: speedKph);
     _refreshDaylight();
     notifyListeners();
   }

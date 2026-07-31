@@ -314,8 +314,14 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     }
 
     // Zone matching and the solar daylight state both hang off position, so
-    // this has to happen before the conditions are handed to the model.
-    _speed.updatePosition(position.latitude, position.longitude);
+    // this has to happen before the conditions are handed to the model. The
+    // speed goes with it: the approach ring is sized by how fast the driver is
+    // closing on a zone, not by the zone's radius.
+    _speed.updatePosition(
+      position.latitude,
+      position.longitude,
+      speedKph: update.smoothedSpeed.toDouble(),
+    );
     unawaited(_refreshWeatherIfStale(position.latitude, position.longitude));
     _gps.setRoadConditions(_speed.conditions);
 

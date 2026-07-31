@@ -285,41 +285,11 @@ class TripService extends ChangeNotifier {
     );
   }
 
-  void updateTrip(int currentSpeed, int recommendedSpeed) {
-    if (_currentTrip == null) return;
-
-    final alerts = List<SpeedAlert>.from(_currentTrip!.alerts);
-    int overSpeedCount = _currentTrip!.overSpeedCount;
-
-    if (currentSpeed > recommendedSpeed) {
-      overSpeedCount++;
-      alerts.add(
-        SpeedAlert(
-          id: DateTime.now().millisecondsSinceEpoch.toString(),
-          time: DateTime.now(),
-          speed: currentSpeed,
-          recommendedSpeed: recommendedSpeed,
-          type: AlertType.overSpeed,
-        ),
-      );
-    }
-
-    final speeds = List<int>.from(
-      _currentTrip!.maxSpeed > 0
-          ? [_currentTrip!.maxSpeed, currentSpeed]
-          : [currentSpeed],
-    );
-    final maxSpeed = speeds.reduce((a, b) => a > b ? a : b);
-    final avgSpeed = currentSpeed;
-
-    _currentTrip = _currentTrip!.copyWith(
-      maxSpeed: maxSpeed,
-      avgSpeed: avgSpeed,
-      overSpeedCount: overSpeedCount,
-      alerts: alerts,
-    );
-    notifyListeners();
-  }
+  // `updateTrip(currentSpeed, recommendedSpeed)` used to live here. It was
+  // dead but public, and it counted an alert on every call with no edge
+  // detection — wiring it up would have undone the Phase 3 fix that made
+  // over-speed a per-episode event rather than a per-sample one. It also set
+  // `avgSpeed = currentSpeed`, which is not an average. Use `addRecord`.
 
   Future<void> endTrip() async {
     if (_currentTrip != null) {

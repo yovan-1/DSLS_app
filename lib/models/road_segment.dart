@@ -1,5 +1,6 @@
 import 'dart:math';
 import 'speed_calculator.dart';
+import 'speed_model/road_conditions.dart' show LimitSource;
 
 class RoadSegment {
   final String id;
@@ -9,6 +10,15 @@ class RoadSegment {
   final int widthMeters;
   final LocationType type;
 
+  /// Whether [speedLimit] is a real posted limit or a guess.
+  ///
+  /// Defaults to [LimitSource.inferred], because the segments shipped in
+  /// `lib/data/roads.dart` are eyeballed polylines with no provenance — one of
+  /// them approximates ~90 km of highway with four points. They used to reach
+  /// [SpeedAdvisor] as `curated`, which is full confidence with no uncertainty
+  /// margin. OSM-derived rows set this from the `maxspeed` tag instead.
+  final LimitSource limitSource;
+
   const RoadSegment({
     required this.id,
     required this.name,
@@ -16,6 +26,7 @@ class RoadSegment {
     required this.speedLimit,
     this.widthMeters = 20,
     required this.type,
+    this.limitSource = LimitSource.inferred,
   });
 
   Map<String, dynamic> toJson() => {
@@ -24,7 +35,9 @@ class RoadSegment {
         'waypoints': waypoints.map((p) => p.toJson()).toList(),
         'speedLimit': speedLimit,
         'widthMeters': widthMeters,
-        'type': type.index,
+        // By name, not index — see the note on SpeedZone.toJson.
+        'type': type.name,
+        'limitSource': limitSource.name,
       };
 
   factory RoadSegment.fromJson(Map<String, dynamic> json) => RoadSegment(
@@ -35,8 +48,25 @@ class RoadSegment {
             .toList(),
         speedLimit: json['speedLimit'] as int,
         widthMeters: json['widthMeters'] as int? ?? 20,
-        type: LocationType.values[json['type'] as int],
+        type: _locationTypeFrom(json['type']),
+        limitSource: LimitSource.values.firstWhere(
+          (v) => v.name == json['limitSource'],
+          orElse: () => LimitSource.inferred,
+        ),
       );
+
+  /// Accepts both the current name form and the legacy index form.
+  static LocationType _locationTypeFrom(Object? raw) {
+    if (raw is int) {
+      return raw >= 0 && raw < LocationType.values.length
+          ? LocationType.values[raw]
+          : LocationType.urban;
+    }
+    return LocationType.values.firstWhere(
+      (v) => v.name == raw,
+      orElse: () => LocationType.urban,
+    );
+  }
 
   double distanceToPoint(double lat, double lon) {
     if (waypoints.length < 2) {
@@ -108,23 +138,39 @@ class LocationUtils {
     return earthRadius * c;
   }
 
+  /// Shortest distance in metres from a point to a segment, both given as
+  /// (latitude, longitude) in degrees.
+  ///
+  /// The projection is computed in a local equirectangular frame — longitude
+  /// degrees scaled by `cos(latitude)` — rather than in raw degree space. A
+  /// degree of longitude is only as long as a degree of latitude at the
+  /// equator; at 50°N it is about two thirds as long. Projecting in raw degrees
+  /// therefore lands the nearest point in the wrong place, by more the further
+  /// you get from the equator and the longer the segment. That is invisible at
+  /// Mbarara (0.6°S, cos ≈ 0.99995) and wrong everywhere else, so it stayed
+  /// latent while the only data was eight hand-typed Mbarara zones.
   static double pointToLineSegmentDistance(
-      double px, double py, double x1, double y1, double x2, double y2) {
-    final dx = x2 - x1;
-    final dy = y2 - y1;
-    final lengthSq = dx * dx + dy * dy;
+      double px, double py, double lat1, double lon1, double lat2, double lon2) {
+    // Scale longitude at the segment's mid-latitude. Over a single road
+    // segment the change in cos(lat) is negligible, so one factor is enough.
+    final lonScale = cos(_toRadians((lat1 + lat2) / 2));
+
+    final dLat = lat2 - lat1;
+    final dLon = (lon2 - lon1) * lonScale;
+    final lengthSq = dLat * dLat + dLon * dLon;
 
     if (lengthSq == 0) {
-      return haversineDistance(px, py, x1, y1);
+      return haversineDistance(px, py, lat1, lon1);
     }
 
-    final t = ((px - x1) * dx + (py - y1) * dy) / lengthSq;
+    final t = ((px - lat1) * dLat + ((py - lon1) * lonScale) * dLon) / lengthSq;
     final clampedT = t.clamp(0.0, 1.0);
 
-    final projX = x1 + clampedT * dx;
-    final projY = y1 + clampedT * dy;
+    // Back out of the scaled frame to get real coordinates for the haversine.
+    final projLat = lat1 + clampedT * dLat;
+    final projLon = lon1 + clampedT * (lon2 - lon1);
 
-    return haversineDistance(px, py, projX, projY);
+    return haversineDistance(px, py, projLat, projLon);
   }
 
   static double _toRadians(double degrees) => degrees * pi / 180;

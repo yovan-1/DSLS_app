@@ -136,9 +136,12 @@ class FakeSpeedService extends SpeedService {
       );
 
   @override
-  void updatePosition(double lat, double lon) {
+  void updatePosition(double lat, double lon, {double speedKph = 0}) {
     updatePositionCalls++;
+    lastSpeedKph = speedKph;
   }
+
+  double lastSpeedKph = 0;
 
   @override
   void updateWeather(WeatherCondition weather) {}
