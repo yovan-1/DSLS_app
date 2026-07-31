@@ -16,13 +16,26 @@ class DrivingRecord {
   final bool isOverSpeed;
   final DateTime timestamp;
 
+  /// Where the sample was taken. Null for trips recorded before positions
+  /// were stored, and whenever no fix was available.
+  ///
+  /// The records were always sampled once per second during a drive; they just
+  /// never carried a position, which is why the app claimed to upload a "GPS
+  /// route path" it had never recorded.
+  final double? latitude;
+  final double? longitude;
+
   DrivingRecord({
     required this.speed,
     required this.recommendedSpeed,
     required this.riskBand,
     required this.isOverSpeed,
     required this.timestamp,
+    this.latitude,
+    this.longitude,
   });
+
+  bool get hasPosition => latitude != null && longitude != null;
 
   /// True when conditions alone put this sample in a dangerous band, before
   /// considering what the driver did about it.
@@ -279,6 +292,8 @@ class TripService extends ChangeNotifier {
     int? roadId,
     int? actualSpeedLimit,
     String? surface,
+    double? latitude,
+    double? longitude,
   }) {
     if (!_isTracking) return;
 
@@ -296,6 +311,8 @@ class TripService extends ChangeNotifier {
       riskBand: riskBand,
       isOverSpeed: isOverSpeed,
       timestamp: now,
+      latitude: latitude,
+      longitude: longitude,
     );
     _drivingRecords.add(record);
     _speedSum += speed;
@@ -388,6 +405,10 @@ class TripService extends ChangeNotifier {
 
       if (_cloudUploadService != null &&
           _settingsService?.autoUploadEnabled == true) {
+        // `uploadTrip` queues the trip itself if it fails, so the result is
+        // handled rather than discarded. This used to be a bare `unawaited`
+        // whose false return went nowhere: a failed auto-upload meant the trip
+        // was never uploaded, with nothing recording that it had been tried.
         unawaited(_cloudUploadService!.uploadTrip(completedTrip));
       }
 

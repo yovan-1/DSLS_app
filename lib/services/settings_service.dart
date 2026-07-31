@@ -72,6 +72,12 @@ class AlertSettings {
 }
 
 class AwsCredentials {
+  /// One place for these, rather than the three the defaults used to be
+  /// repeated across — the region in particular was hardcoded over whatever
+  /// the user had stored.
+  static const String defaultBucket = 'dsls-trip-data';
+  static const String defaultRegion = 'us-east-1';
+
   final String accessKey;
   final String secretKey;
   final String bucketName;
@@ -80,8 +86,8 @@ class AwsCredentials {
   const AwsCredentials({
     required this.accessKey,
     required this.secretKey,
-    this.bucketName = 'dsls-trip-data',
-    this.region = 'us-east-1',
+    this.bucketName = defaultBucket,
+    this.region = defaultRegion,
   });
 
   Map<String, dynamic> toJson() => {
@@ -94,9 +100,52 @@ class AwsCredentials {
   factory AwsCredentials.fromJson(Map<String, dynamic> json) => AwsCredentials(
     accessKey: json['accessKey'] ?? '',
     secretKey: json['secretKey'] ?? '',
-    bucketName: json['bucketName'] ?? 'dsls-trip-data',
-    region: json['region'] ?? 'us-east-1',
+    bucketName: json['bucketName'] ?? defaultBucket,
+    region: json['region'] ?? defaultRegion,
   );
+
+  AwsCredentials copyWith({
+    String? accessKey,
+    String? secretKey,
+    String? bucketName,
+    String? region,
+  }) =>
+      AwsCredentials(
+        accessKey: accessKey ?? this.accessKey,
+        secretKey: secretKey ?? this.secretKey,
+        bucketName: bucketName ?? this.bucketName,
+        region: region ?? this.region,
+      );
+
+  /// Redacted. Without this the default `toString` prints the instance, so a
+  /// single stray `debugPrint` would leak a long-lived IAM secret into the
+  /// device log. The access key is shown truncated because it is useful for
+  /// telling two configurations apart and is not itself the secret.
+  @override
+  String toString() {
+    final keyHint = accessKey.length <= 4
+        ? '****'
+        : '${accessKey.substring(0, 4)}...';
+    return 'AwsCredentials($keyHint, secret: <redacted>, '
+        'bucket: $bucketName, region: $region)';
+  }
+}
+
+/// Why [SettingsService.getAwsCredentials] returned nothing.
+///
+/// "Never configured" and "configured but unreadable" used to be
+/// indistinguishable — both surfaced as null — so a user upgrading from an
+/// older build saw a filled-in form and uploads that silently never happened.
+enum CredentialState {
+  /// Nothing has ever been saved.
+  absent,
+
+  /// A blob exists and decrypted cleanly.
+  present,
+
+  /// A blob exists but cannot be decrypted with the current key. Almost always
+  /// an upgrade from a build that derived the key differently.
+  unreadable,
 }
 
 class SettingsService extends ChangeNotifier {
@@ -201,11 +250,30 @@ class SettingsService extends ChangeNotifier {
     }
   }
 
-  Future<AwsCredentials?> getAwsCredentials() async {
-    try {
-      final stored = _prefs?.getString(_keyAwsCredentials);
-      if (stored == null) return null;
+  /// Whether the stored credentials are absent, readable, or present but
+  /// undecryptable. Set by every call to [getAwsCredentials].
+  CredentialState _credentialState = CredentialState.absent;
 
+  CredentialState get credentialState => _credentialState;
+
+  /// True when a credential blob exists that cannot be decrypted.
+  ///
+  /// This happens on upgrade from a build before `278a2ae`, which derived the
+  /// AES key from the device id plus a salt rather than reading a random key
+  /// from secure storage. The envelope format is unchanged, so the blob parses
+  /// and then decrypts to garbage. The UI must ask for the credentials again
+  /// instead of showing a configured-looking form that never uploads.
+  bool get credentialsNeedReentry =>
+      _credentialState == CredentialState.unreadable;
+
+  Future<AwsCredentials?> getAwsCredentials() async {
+    final stored = _prefs?.getString(_keyAwsCredentials);
+    if (stored == null) {
+      _setCredentialState(CredentialState.absent);
+      return null;
+    }
+
+    try {
       final combined = jsonDecode(stored) as Map<String, dynamic>;
       final iv = encrypt.IV.fromBase64(combined['iv']);
       final encrypted = encrypt.Encrypted.fromBase64(combined['data']);
@@ -216,11 +284,29 @@ class SettingsService extends ChangeNotifier {
       );
 
       final decrypted = encrypter.decrypt(encrypted, iv: iv);
-      return AwsCredentials.fromJson(jsonDecode(decrypted));
+      final credentials = AwsCredentials.fromJson(jsonDecode(decrypted));
+      _setCredentialState(CredentialState.present);
+      return credentials;
     } catch (e) {
-      debugPrint('[Settings] Error decrypting AWS credentials: $e');
+      // A blob is there and we cannot read it — materially different from
+      // having none, and the user has to be told.
+      debugPrint('[Settings] Stored AWS credentials could not be decrypted: $e');
+      _setCredentialState(CredentialState.unreadable);
       return null;
     }
+  }
+
+  /// Discards an unreadable blob so the app stops retrying it and the sync
+  /// screen presents a clean form.
+  Future<void> clearAwsCredentials() async {
+    await _prefs?.remove(_keyAwsCredentials);
+    _setCredentialState(CredentialState.absent);
+  }
+
+  void _setCredentialState(CredentialState state) {
+    if (_credentialState == state) return;
+    _credentialState = state;
+    notifyListeners();
   }
 
   Future<bool> hasAwsCredentials() async {

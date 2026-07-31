@@ -6,6 +6,38 @@ import '../models/speed_model/speed_recommendation.dart' show RiskBand;
 import '../models/trip_data.dart';
 import 'trip_service.dart' show DrivingRecord;
 
+/// A trip waiting to be uploaded.
+@immutable
+class QueuedUpload {
+  final String tripId;
+  final DateTime queuedAt;
+  final int attempts;
+  final String? lastError;
+
+  const QueuedUpload({
+    required this.tripId,
+    required this.queuedAt,
+    required this.attempts,
+    this.lastError,
+  });
+}
+
+/// One upload attempt, successful or not.
+@immutable
+class UploadHistoryEntry {
+  final String tripId;
+  final DateTime at;
+  final bool succeeded;
+  final String? detail;
+
+  const UploadHistoryEntry({
+    required this.tripId,
+    required this.at,
+    required this.succeeded,
+    this.detail,
+  });
+}
+
 /// Persistent storage for trips, their per-second records and their alert
 /// episodes.
 ///
@@ -18,7 +50,9 @@ import 'trip_service.dart' show DrivingRecord;
 /// computed from an in-memory list that cleared on the next trip: every one of
 /// those numbers was meaningless after an app restart.
 class TripRepository {
-  static const int schemaVersion = 1;
+  /// v2 adds the upload queue and history, and latitude/longitude on
+  /// `driving_records` so a trip carries the route it was actually driven.
+  static const int schemaVersion = 2;
   static const String defaultFileName = 'trips.db';
 
   Database? _db;
@@ -38,15 +72,17 @@ class TripRepository {
         version: schemaVersion,
         onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
         onCreate: (db, version) async {
-          for (final statement in _schema) {
+          for (final statement in [..._schema, ..._schemaV2]) {
             await db.execute(statement);
           }
         },
         onUpgrade: (db, from, to) async {
-          // Nothing to migrate yet. The version column exists so the next
-          // schema change has somewhere to hook in rather than needing a
-          // wipe — the JSON blob this replaces had no version at all.
           debugPrint('[TripRepository] Schema $from -> $to');
+          if (from < 2) {
+            for (final statement in _schemaV2) {
+              await db.execute(statement);
+            }
+          }
         },
       ),
     );
@@ -97,6 +133,38 @@ class TripRepository {
     ''',
     'CREATE INDEX idx_alerts_trip ON alert_episodes(trip_id)',
     'CREATE TABLE settings_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+  ];
+
+  /// Added in v2.
+  ///
+  /// The upload queue lives here rather than in a second store: the trips it
+  /// refers to are already in this database, and a queue that can disagree with
+  /// the trip table is worse than no queue. It replaces two in-memory lists
+  /// that evaporated on every restart.
+  static const List<String> _schemaV2 = [
+    '''
+    CREATE TABLE upload_queue (
+      trip_id TEXT PRIMARY KEY REFERENCES trips(id) ON DELETE CASCADE,
+      queued_at TEXT NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0,
+      last_attempt_at TEXT,
+      last_error TEXT
+    )
+    ''',
+    '''
+    CREATE TABLE upload_history (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trip_id TEXT NOT NULL,
+      uploaded_at TEXT NOT NULL,
+      succeeded INTEGER NOT NULL,
+      detail TEXT
+    )
+    ''',
+    'CREATE INDEX idx_history_time ON upload_history(uploaded_at DESC)',
+    // The route the trip was actually driven. `driving_records` already holds
+    // one row per second; it was simply never given a position.
+    'ALTER TABLE driving_records ADD COLUMN latitude REAL',
+    'ALTER TABLE driving_records ADD COLUMN longitude REAL',
   ];
 
   Future<List<TripData>> loadTrips() async {
@@ -150,6 +218,8 @@ class TripRepository {
           'recommended_speed': record.recommendedSpeed,
           'risk_band': record.riskBand.name,
           'is_over_speed': record.isOverSpeed ? 1 : 0,
+          'latitude': record.latitude,
+          'longitude': record.longitude,
         });
       }
       for (final alert in trip.alerts) {
@@ -188,13 +258,143 @@ class TripRepository {
               riskBand: _riskBandFrom(row['risk_band'] as String),
               isOverSpeed: (row['is_over_speed'] as int) == 1,
               timestamp: DateTime.parse(row['timestamp'] as String),
+              latitude: row['latitude'] as double?,
+              longitude: row['longitude'] as double?,
             ))
         .toList();
   }
 
   Future<void> deleteTrip(String id) async {
-    // ON DELETE CASCADE takes the records and episodes with it.
+    // ON DELETE CASCADE takes the records, episodes and queue entry with it.
     await _db?.delete('trips', where: 'id = ?', whereArgs: [id]);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Upload queue
+  //
+  // Previously two in-memory lists on CloudUploadService that nothing ever
+  // wrote to and that vanished on restart. A trip whose auto-upload failed was
+  // simply never uploaded, with no record that it had been attempted.
+  // ---------------------------------------------------------------------------
+
+  /// Adds a trip to the upload queue, or leaves an existing entry alone.
+  Future<void> enqueueUpload(String tripId) async {
+    await _db?.insert(
+      'upload_queue',
+      {'trip_id': tripId, 'queued_at': DateTime.now().toIso8601String()},
+      conflictAlgorithm: ConflictAlgorithm.ignore,
+    );
+  }
+
+  /// Queued trips that have not exhausted their retries, oldest first.
+  Future<List<QueuedUpload>> pendingUploads({int maxAttempts = 5}) async {
+    final db = _db;
+    if (db == null) return const [];
+
+    final rows = await db.query(
+      'upload_queue',
+      where: 'attempts < ?',
+      whereArgs: [maxAttempts],
+      orderBy: 'queued_at',
+    );
+
+    return rows
+        .map((row) => QueuedUpload(
+              tripId: row['trip_id'] as String,
+              queuedAt: DateTime.parse(row['queued_at'] as String),
+              attempts: row['attempts'] as int,
+              lastError: row['last_error'] as String?,
+            ))
+        .toList();
+  }
+
+  /// How many trips are waiting, including any that have given up.
+  Future<int> pendingUploadCount() async {
+    final db = _db;
+    if (db == null) return 0;
+    final rows = await db.rawQuery('SELECT COUNT(*) c FROM upload_queue');
+    return (rows.first['c'] as int?) ?? 0;
+  }
+
+  Future<void> dequeueUpload(String tripId) async {
+    await _db?.delete('upload_queue', where: 'trip_id = ?', whereArgs: [tripId]);
+  }
+
+  /// Records a failed attempt so retries are bounded and the reason survives a
+  /// restart.
+  Future<void> recordUploadFailure(String tripId, String error) async {
+    await _db?.rawUpdate(
+      'UPDATE upload_queue SET attempts = attempts + 1,'
+      ' last_attempt_at = ?, last_error = ? WHERE trip_id = ?',
+      [DateTime.now().toIso8601String(), error, tripId],
+    );
+  }
+
+  Future<void> addUploadHistory(
+    String tripId, {
+    required bool succeeded,
+    String? detail,
+  }) async {
+    final db = _db;
+    if (db == null) return;
+
+    await db.insert('upload_history', {
+      'trip_id': tripId,
+      'uploaded_at': DateTime.now().toIso8601String(),
+      'succeeded': succeeded ? 1 : 0,
+      'detail': detail,
+    });
+
+    // Keep the table bounded; the old in-memory list capped at 50.
+    await db.rawDelete(
+      'DELETE FROM upload_history WHERE id NOT IN'
+      ' (SELECT id FROM upload_history ORDER BY uploaded_at DESC LIMIT 50)',
+    );
+  }
+
+  Future<List<UploadHistoryEntry>> uploadHistory({int limit = 50}) async {
+    final db = _db;
+    if (db == null) return const [];
+
+    final rows = await db.query(
+      'upload_history',
+      orderBy: 'uploaded_at DESC',
+      limit: limit,
+    );
+
+    return rows
+        .map((row) => UploadHistoryEntry(
+              tripId: row['trip_id'] as String,
+              at: DateTime.parse(row['uploaded_at'] as String),
+              succeeded: (row['succeeded'] as int) == 1,
+              detail: row['detail'] as String?,
+            ))
+        .toList();
+  }
+
+  /// The recorded route for a trip, for upload. Empty for trips recorded
+  /// before positions were stored.
+  Future<List<({double latitude, double longitude, DateTime at})>> routeFor(
+    String tripId,
+  ) async {
+    final db = _db;
+    if (db == null) return const [];
+
+    final rows = await db.query(
+      'driving_records',
+      columns: ['latitude', 'longitude', 'timestamp'],
+      where: 'trip_id = ? AND latitude IS NOT NULL AND longitude IS NOT NULL',
+      whereArgs: [tripId],
+      orderBy: 'timestamp',
+    );
+
+    return rows
+        .map((row) => (
+              latitude: row['latitude'] as double,
+              longitude: row['longitude'] as double,
+              at: DateTime.parse(row['timestamp'] as String),
+            ))
+        .toList();
   }
 
   Future<void> clear() async {

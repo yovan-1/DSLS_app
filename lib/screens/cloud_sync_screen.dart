@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/settings_service.dart';
 import '../services/cloud_upload_service.dart';
+import '../services/trip_export_service.dart';
 import '../services/trip_service.dart';
 
 class CloudSyncScreen extends StatefulWidget {
@@ -15,27 +16,80 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
   final _formKey = GlobalKey<FormState>();
   final _accessKeyController = TextEditingController();
   final _secretKeyController = TextEditingController();
-  final _bucketController = TextEditingController(text: 'dsls-trip-data');
-  
+  final _bucketController =
+      TextEditingController(text: AwsCredentials.defaultBucket);
+  final _regionController =
+      TextEditingController(text: AwsCredentials.defaultRegion);
+
   bool _isLoading = false;
   bool _isTesting = false;
   bool _isConfigured = false;
   bool _showSecretKey = false;
+  bool _needsReentry = false;
+  bool _isExporting = false;
+  // Was declared mid-class, well after its first use.
+  bool _isUploading = false;
+
+  Future<void> _exportTrips() async {
+    final tripService = context.read<TripService>();
+    final exporter = context.read<TripExportService>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    setState(() => _isExporting = true);
+    try {
+      final shared = await exporter.shareTrips(tripService.trips);
+      if (!mounted) return;
+      if (!shared) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('No trips to export yet')),
+        );
+      }
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text('Export failed: $e'), backgroundColor: Colors.red),
+      );
+    } finally {
+      if (mounted) setState(() => _isExporting = false);
+    }
+  }
 
   @override
   void initState() {
     super.initState();
-    _loadCurrentSettings();
+    // Read the service here, not inside the async body: by the time the await
+    // resolves the element may be gone.
+    final settings = context.read<SettingsService>();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _loadCurrentSettings(settings);
+    });
   }
 
-  Future<void> _loadCurrentSettings() async {
-    final settings = context.read<SettingsService>();
+  Future<void> _loadCurrentSettings(SettingsService settings) async {
     final credentials = await settings.getAwsCredentials();
+    if (!mounted) return;
+
+    if (settings.credentialsNeedReentry) {
+      // A blob is stored that this build cannot decrypt — an upgrade from a
+      // version that derived the key differently. Say so and start clean,
+      // rather than showing a configured-looking form that never uploads.
+      await settings.clearAwsCredentials();
+      if (!mounted) return;
+      setState(() {
+        _needsReentry = true;
+        _isConfigured = false;
+      });
+      return;
+    }
+
     if (credentials != null && credentials.accessKey.isNotEmpty) {
       setState(() {
         _accessKeyController.text = credentials.accessKey;
-        _secretKeyController.text = credentials.secretKey;
+        // The secret is deliberately not prefilled. Re-entering it is a small
+        // cost; rendering a long-lived IAM secret into a widget that can be
+        // revealed, screenshotted or read by an accessibility service is not.
         _bucketController.text = credentials.bucketName;
+        _regionController.text = credentials.region;
         _isConfigured = true;
       });
     }
@@ -46,6 +100,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     _accessKeyController.dispose();
     _secretKeyController.dispose();
     _bucketController.dispose();
+    _regionController.dispose();
     super.dispose();
   }
 
@@ -60,10 +115,17 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
         accessKey: _accessKeyController.text.trim(),
         secretKey: _secretKeyController.text.trim(),
         bucketName: _bucketController.text.trim(),
-        region: 'us-east-1',
+        // Was hardcoded to us-east-1 here, silently overwriting whatever the
+        // model carried. A bucket in any other region could never be reached.
+        region: _regionController.text.trim().isEmpty
+            ? AwsCredentials.defaultRegion
+            : _regionController.text.trim(),
       ));
 
-      setState(() => _isConfigured = true);
+      setState(() {
+        _isConfigured = true;
+        _needsReentry = false;
+      });
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -97,10 +159,14 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(success 
-                ? 'Connection successful!' 
-                : 'Connection failed. Check your credentials.'),
+            // Report what S3 actually said. "Check your credentials" was a
+            // guess, and usually the wrong one — a missing bucket, a wrong
+            // region or a denied policy all look identical under it.
+            content: Text(success
+                ? 'Connection successful!'
+                : cloudService.lastError ?? 'Connection failed.'),
             backgroundColor: success ? Colors.green : Colors.red,
+            duration: const Duration(seconds: 6),
           ),
         );
       }
@@ -176,7 +242,6 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
     }
   }
 
-  bool _isUploading = false;
 
   @override
   Widget build(BuildContext context) {
@@ -190,13 +255,17 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
           onPressed: () => Navigator.of(context).pop(),
         ),
       ),
-      body: Consumer<SettingsService>(
-        builder: (context, settings, child) {
+      // Watching the upload service too, so its notifyListeners actually
+      // reaches the UI — previously the screen consumed only SettingsService
+      // and every notification the upload service fired went nowhere.
+      body: Consumer2<SettingsService, CloudUploadService>(
+        builder: (context, settings, uploads, child) {
           return ListView(
             padding: const EdgeInsets.all(16),
             children: [
               _buildStatusCard(settings),
               const SizedBox(height: 20),
+              _buildQueueCard(uploads),
               _buildCredentialsForm(),
               const SizedBox(height: 20),
               _buildActionsCard(),
@@ -242,7 +311,7 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                   ),
                 ),
                 Text(
-                  _isConfigured 
+                  _isConfigured
                       ? 'Trip data can be uploaded to S3'
                       : 'Configure AWS credentials to enable cloud sync',
                   style: TextStyle(
@@ -256,6 +325,118 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
         ],
       ),
     );
+  }
+
+  /// What the queue is actually doing.
+  ///
+  /// The screen used to keep its own `_isUploading`/`_isTesting` and read none
+  /// of the service's state, so `pendingCount`, `lastError` and the upload
+  /// history existed but were never shown — and a real S3 error was replaced
+  /// with "Connection failed. Check your credentials."
+  Widget _buildQueueCard(CloudUploadService uploads) {
+    final pending = uploads.pendingCount;
+    final error = uploads.lastError;
+    final history = uploads.uploadHistory;
+
+    if (pending == 0 && error == null && history.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Card(
+      elevation: 2,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Row(
+              children: [
+                Icon(Icons.sync, size: 20),
+                SizedBox(width: 8),
+                Text(
+                  'Upload Queue',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              children: [
+                Icon(
+                  pending == 0 ? Icons.check_circle_outline : Icons.schedule,
+                  size: 18,
+                  color: pending == 0 ? Colors.green : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  pending == 0
+                      ? 'Nothing waiting to upload'
+                      : '$pending trip${pending == 1 ? '' : 's'} waiting — '
+                          'will retry automatically',
+                  style: const TextStyle(fontSize: 13),
+                ),
+              ],
+            ),
+            if (error != null) ...[
+              const SizedBox(height: 10),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.red.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Text(
+                  // The real reason, not a guess about credentials.
+                  'Last error: $error',
+                  style: TextStyle(fontSize: 11, color: Colors.red.shade900),
+                ),
+              ),
+            ],
+            if (history.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              Text(
+                'Recent attempts',
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.bold,
+                  color: Colors.grey.shade700,
+                ),
+              ),
+              const SizedBox(height: 6),
+              ...history.take(5).map(
+                    (entry) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 2),
+                      child: Row(
+                        children: [
+                          Icon(
+                            entry.succeeded ? Icons.check : Icons.close,
+                            size: 14,
+                            color: entry.succeeded ? Colors.green : Colors.red,
+                          ),
+                          const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              '${_formatTime(entry.at)}  ${entry.tripId}',
+                              style: const TextStyle(fontSize: 11),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatTime(DateTime at) {
+    String two(int n) => n.toString().padLeft(2, '0');
+    return '${two(at.day)}/${two(at.month)} ${two(at.hour)}:${two(at.minute)}';
   }
 
   Widget _buildCredentialsForm() {
@@ -284,6 +465,65 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                 'Credentials are encrypted locally using AES-256',
                 style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
               ),
+              const SizedBox(height: 12),
+              // Encryption at rest does not change the fact that the device
+              // holds a durable key to the bucket. Say so where it matters.
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: Colors.amber.shade50,
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: Colors.amber.shade300),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.warning_amber_outlined,
+                        size: 18, color: Colors.amber.shade800),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'This device stores a long-lived AWS key. Anyone with '
+                        'the unlocked phone can use it. Scope the IAM policy to '
+                        'PutObject on this bucket only, and rotate the key if '
+                        'the device is lost.',
+                        style: TextStyle(
+                            fontSize: 11, color: Colors.amber.shade900),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_needsReentry) ...[
+                const SizedBox(height: 12),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(10),
+                  decoration: BoxDecoration(
+                    color: Colors.red.shade50,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.red.shade300),
+                  ),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Icon(Icons.error_outline,
+                          size: 18, color: Colors.red.shade700),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Your saved credentials could not be read after the '
+                          'app update and have been cleared. Please enter them '
+                          'again.',
+                          style: TextStyle(
+                              fontSize: 11, color: Colors.red.shade900),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 16),
               TextFormField(
                 controller: _accessKeyController,
@@ -321,12 +561,28 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
               ),
               const SizedBox(height: 16),
               TextFormField(
+                controller: _regionController,
+                decoration: const InputDecoration(
+                  labelText: 'AWS Region',
+                  border: OutlineInputBorder(),
+                  prefixIcon: Icon(Icons.public),
+                  hintText: AwsCredentials.defaultRegion,
+                ),
+                validator: (value) {
+                  if (value == null || value.trim().isEmpty) {
+                    return 'Region is required';
+                  }
+                  return null;
+                },
+              ),
+              const SizedBox(height: 16),
+              TextFormField(
                 controller: _bucketController,
                 decoration: const InputDecoration(
                   labelText: 'S3 Bucket Name',
                   border: OutlineInputBorder(),
                   prefixIcon: Icon(Icons.storage),
-                  hintText: 'dsls-trip-data',
+                  hintText: AwsCredentials.defaultBucket,
                 ),
                 validator: (value) {
                   if (value == null || value.trim().isEmpty) {
@@ -402,6 +658,29 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
                     : const Icon(Icons.upload),
                 label: Text(_isUploading ? 'Uploading...' : 'Upload All Trips'),
               ),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              width: double.infinity,
+              child: OutlinedButton.icon(
+                // Needs no AWS account at all — the useful path for a pilot
+                // device that was never given credentials.
+                onPressed: (tripCount == 0 || _isExporting) ? null : _exportTrips,
+                icon: _isExporting
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.ios_share),
+                label: Text(_isExporting ? 'Preparing...' : 'Export & Share'),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Export writes a JSON and a CSV and hands them to the share '
+              'sheet. No AWS account needed.',
+              style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
             ),
           ],
         ),
@@ -479,9 +758,10 @@ class _CloudSyncScreenState extends State<CloudSyncScreen> {
           Text(
             'Uploaded trip data includes:\n'
             '• Speed limit and actual speeds\n'
-            '• GPS route path\n'
-            '• Road surface estimates\n'
+            '• GPS route path, sampled once a second\n'
+            '• Road surface estimates, where OpenStreetMap has them\n'
             '• Risk analysis scores\n\n'
+            'Trips recorded before this version have no route path.\n\n'
             'This data helps the roads department:\n'
             '• Identify high-risk road segments\n'
             '• Adjust speed limits based on conditions\n'

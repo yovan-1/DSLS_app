@@ -340,7 +340,7 @@ class DrivingSessionCoordinator extends ChangeNotifier {
         risk?.recommendation ?? SpeedAdvisor.evaluate(_speed.conditions);
 
     _dispatchAlerts(speed, recommendation.recommendedSpeedKph);
-    _recordIfDue(speed, recommendation);
+    _recordIfDue(speed, recommendation, position);
 
     _pushNotification();
     _safeNotify();
@@ -392,7 +392,11 @@ class DrivingSessionCoordinator extends ChangeNotifier {
     }
   }
 
-  void _recordIfDue(int speed, SpeedRecommendation recommendation) {
+  void _recordIfDue(
+    int speed,
+    SpeedRecommendation recommendation,
+    Position position,
+  ) {
     final now = DateTime.now();
     final last = _lastRecordAt;
     if (last != null && now.difference(last) < recordInterval) return;
@@ -403,6 +407,11 @@ class DrivingSessionCoordinator extends ChangeNotifier {
       speed: speed,
       recommendedSpeed: recommendation.recommendedSpeedKph,
       riskBand: recommendation.riskBand,
+      // The records were always sampled once a second; they simply never
+      // carried a position, which is why the app claimed to upload a route it
+      // had never recorded.
+      latitude: position.latitude,
+      longitude: position.longitude,
       // Where the driving happened, not just how fast. These reached the trip
       // record as nulls for the whole life of the app.
       roadId: location.roadId,

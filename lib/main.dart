@@ -3,7 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'screens/splash_screen.dart';
 import 'screens/dashboard.dart';
+import 'services/trip_export_service.dart';
 import 'services/trip_repository.dart';
+import 'services/upload_sync_scheduler.dart';
 import 'services/trip_service.dart';
 import 'services/speed_service.dart';
 import 'services/alert_service.dart';
@@ -66,10 +68,23 @@ void main() async {
     try {
       await tripRepository.open();
       tripService.setRepository(tripRepository);
+      // The upload queue and history live in the same database as the trips
+      // they refer to, so they survive a restart instead of evaporating.
+      cloudUploadService.setRepository(tripRepository);
+      await cloudUploadService.init();
     } catch (e) {
       debugPrint('[main] Trip database unavailable, using legacy storage: $e');
     }
     await tripService.loadTrips();
+
+    // Credential-free egress: writes a file and hands it to the share sheet,
+    // for devices that were never given AWS keys.
+    final tripExportService = TripExportService(repository: tripRepository);
+
+    // Retries anything left queued from a previous run, then again whenever the
+    // network comes back.
+    final uploadScheduler = UploadSyncScheduler(uploads: cloudUploadService);
+    unawaited(uploadScheduler.start());
 
     // Built here rather than with lazy `create:` providers so that construction
     // order is explicit and the coordinator can hold direct references — its
@@ -119,6 +134,7 @@ void main() async {
           ChangeNotifierProvider.value(value: visibilityService),
           ChangeNotifierProvider.value(value: motionService),
           ChangeNotifierProvider.value(value: sessionCoordinator),
+          Provider<TripExportService>.value(value: tripExportService),
         ],
         child: const MyApp(),
       ),
